@@ -5,7 +5,7 @@
 - Los errores HTTP de validación y scraper inexistente se distinguen de fallos de conexión, timeout y respuestas sin snapshot. Se conserva un código seguro y no se guardan mensajes externos en bruto.
 - Timeout de inicio ampliado de 8 a 25 segundos; límite por perfil 55 segundos y proxy 180 segundos.
 - 68 pruebas de backend aprobadas, incluidas pruebas sintéticas para cada diagnóstico, persistencia del código, ausencia de reenvío y compatibilidad con intentos antiguos sin causa guardada. Docker reconstruido y API saludable.
-- Comprobación de lectura desde Docker: el backend recibió la clave, la API respondió HTTP 200 y ambos IDs configurados aparecieron en el catálogo. La consulta de snapshots de Instagram no devolvió ejecuciones. No se lanzó una recolección real para esta corrección; no se puede recuperar la respuesta del intento antiguo.
+- Comprobación de lectura desde Docker: el backend recibió la clave, la API respondió HTTP 200 y ambos IDs configurados aparecieron en el catálogo. La consulta inicial de snapshots de Instagram no devolvió ejecuciones. Tras autorización explícita se realizó una única recolección del perfil que falló: Bright Data entregó snapshot, el trabajo terminó y se guardó el perfil normalizado con contadores reales. No hubo reintentos de POST. La causa exacta del intento antiguo sigue sin poder reconstruirse porque no conservó el diagnóstico.
 
 ## Actualización: Bright Data principal
 
