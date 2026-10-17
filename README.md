@@ -2,6 +2,8 @@
 
 Base funcional para el Reto 30X: **Python 3.12 + FastAPI + React/TypeScript + PostgreSQL**. Implementa los pasos 1 y 3 del esquema del equipo y un contrato de ingesta para el paso 2.
 
+Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integración real](docs/real-setup.md). Distingue la configuración ya disponible del desarrollo que todavía falta.
+
 ## Arranque con Docker
 
 Requiere Docker Desktop con el motor Linux activo y Docker Compose v2. Desde la raíz:
