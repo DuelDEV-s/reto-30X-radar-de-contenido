@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 from typing import Annotated
 
@@ -11,16 +12,47 @@ from sqlalchemy.orm import Session
 
 from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
-from .schemas import BatchCreate, BrandCreate, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
+from .discovery import discover_creators, geo_targets
+from .query_builder import QueryContext, build_queries
+from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
+from .post_resolver import OEmbedResolver, PostResolver
+from .serp import BrightDataSerpClient, SerpClient, SerpError
 from .services import analyze, draft_identity
 from .profiles import build_analysis, connector_status, TTL
 from datetime import datetime, timezone
 from .collection_jobs import DBJobStore
 from .interpretation import interpret, VERSION as INTERPRETATION_VERSION
 
+# Uvicorn solo configura sus propios loggers; esto hace visibles los logs INFO de app.* en `docker compose logs api`.
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s:     %(name)s: %(message)s")
 app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
 DB = Annotated[Session, Depends(get_session)]
+
+
+def get_serp_client():
+    try:
+        client = BrightDataSerpClient.from_env()
+    except SerpError as error:
+        raise HTTPException(503, str(error))
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+SERP = Annotated[SerpClient, Depends(get_serp_client)]
+
+
+def get_post_resolver():
+    resolver = OEmbedResolver()
+    try:
+        yield resolver
+    finally:
+        resolver.close()
+
+
+RESOLVER = Annotated[PostResolver, Depends(get_post_resolver)]
 
 
 def get_brand(brand_id, db):
@@ -190,6 +222,23 @@ def report(brand_id: str, db: DB, batch_id: str | None = None, platform: Platfor
     if not row:
         raise HTTPException(404, "No hay un lote público. Importa datos del paso 2 o selecciona explícitamente un lote demo.")
     return {"brand_id": brand_id, "batch_id": row.id, "identity_status": brand.identity["status"], **analyze(BatchCreate.model_validate(row.data), brand.identity, platform=platform, topic=topic, limit=limit, window_days=window_days)}
+
+
+@app.post("/api/brands/{brand_id}/discovery-queries", tags=["step-2-discovery"])
+def discovery_queries(brand_id: str, request: DiscoveryQueryRequest, db: DB):
+    brand = get_brand(brand_id, db)
+    ctx = QueryContext.from_identity(brand.identity, focus_topic=request.topic, platform=request.platform, max_queries=request.max_queries, profiles_only=request.profiles_only)
+    return {"brand_id": brand_id, "identity_status": brand.identity["status"], **build_queries(ctx).model_dump()}
+
+
+@app.post("/api/brands/{brand_id}/creator-search", tags=["step-2-discovery"])
+def creator_search(brand_id: str, request: CreatorSearchRequest, db: DB, serp: SERP, resolver: RESOLVER):
+    brand = get_brand(brand_id, db)
+    plan = build_queries(QueryContext.from_identity(brand.identity, focus_topic=request.topic, max_queries=request.max_queries, profiles_only=request.profiles_only))
+    result = discover_creators(plan, serp, countries=geo_targets(brand.identity["region"], request.countries), resolver=resolver if request.resolve_posts else None)
+    if all(run.error for run in result.queries):
+        raise HTTPException(502, result.queries[0].error)
+    return {"brand_id": brand_id, "identity_status": brand.identity["status"], **result.model_dump()}
 
 
 @app.post("/api/demo", status_code=201, tags=["demo"])

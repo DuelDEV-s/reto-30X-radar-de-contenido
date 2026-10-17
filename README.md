@@ -22,6 +22,14 @@ docker compose ps
 
 Los valores por defecto permiten arrancar sin configurar claves. Para personalizarlos, copiar `.env.example` a `.env` antes del primer arranque. Si la contraseña contiene caracteres reservados de URL, codificarlos en la URL de conexión; para este entorno local usar una contraseña alfanumérica facilita la configuración. Cambiar la contraseña en `.env` no modifica un volumen PostgreSQL ya inicializado.
 
+Para desarrollar el backend sin reconstruir la imagen en cada cambio, usar la capa de desarrollo; monta `backend/` y recarga la API al guardar:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d
+```
+
+Solo hace falta `--build` si cambia `requirements.txt` o el `Dockerfile`. Una migración nueva se aplica con `docker compose restart api`.
+
 Compose espera a que PostgreSQL esté listo; el backend aplica Alembic antes de iniciar y el frontend espera la salud de la API. La base usa un **volumen persistente**. `docker compose down` detiene el entorno conservando datos. `docker compose down -v` elimina definitivamente la base local. No ejecutar este último comando si necesitan conservarla.
 
 Para levantar **solamente la base**:
