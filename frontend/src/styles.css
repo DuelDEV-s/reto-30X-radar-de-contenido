@@ -1849,3 +1849,76 @@ details p {
     padding: 17px;
   }
 }
+
+/* Evidence-backed interpretation, with the same panel vocabulary as profiles. */
+.interpretation-panel {
+  margin: 24px 0;
+}
+.interpretation-context {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line, #e3e8e1);
+}
+.interpretation-facts,
+.interpretation-pillars {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+  margin: 16px 0 24px;
+}
+.interpretation-facts article,
+.interpretation-pillars article {
+  padding: 18px;
+  border: 1px solid var(--line, #e3e8e1);
+  border-radius: 12px;
+  background: #fff;
+  min-width: 0;
+}
+.interpretation-panel h4 {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+.interpretation-panel h4::first-letter {
+  text-transform: uppercase;
+}
+.interpretation-panel h3 {
+  font-size: 18px;
+}
+.interpretation-panel small,
+.interpretation-evidence {
+  color: #586557;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.interpretation-panel p {
+  line-height: 1.65;
+}
+.interpretation-measure {
+  padding-top: 12px;
+  border-top: 1px solid #e8ece6;
+  font-size: 12px;
+}
+.interpretation-evidence {
+  margin-top: 12px;
+  overflow-wrap: anywhere;
+}
+.interpretation-evidence summary,
+.interpretation-limits summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.interpretation-evidence blockquote {
+  margin: 10px 0 8px;
+  padding-left: 12px;
+  border-left: 2px solid #a8d987;
+}
+.interpretation-limits {
+  padding: 16px;
+  background: #f7f9f4;
+  border-radius: 10px;
+  margin-top: 20px;
+}
+.interpretation-limits li {
+  margin-top: 10px;
+  line-height: 1.6;
+  font-size: 13px;
+}

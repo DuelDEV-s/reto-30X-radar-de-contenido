@@ -1,5 +1,12 @@
 # Validación local · 17 de octubre de 2026
 
+## Interpretación local v2
+
+- 83 pruebas backend aprobadas. Cobertura nueva: síntesis sin concatenación de captions, títulos y textos repetidos, varios sectores, evidencia por pilar, foco local con fuentes, muestras sin vistas/formatos, fuentes no habilitadas y protección de identidad confirmada.
+- Endpoint `profiles/interpret` verificado sin llamadas a recolectores. Conserva fechas de observación y requiere aplicación explícita para cambiar la identidad.
+- Docker reconstruido y compilación React/TypeScript aprobada. Reinterpretación de la marca Dulce Tentación realizada exclusivamente sobre sus ocho piezas guardadas: propuesta de helados/postres, foco Ibagué y seis pilares con referencias. Se verificó que la identidad confirmada y los resultados fuente permanecieron idénticos.
+- Botón de reinterpretación comprobado desde el navegador contra Docker. No hubo nuevas extracciones ni llamadas a modelos externos.
+
 ## Corrección: diagnóstico de inicio Bright Data
 
 - Los errores HTTP de validación y scraper inexistente se distinguen de fallos de conexión, timeout y respuestas sin snapshot. Se conserva un código seguro y no se guardan mensajes externos en bruto.

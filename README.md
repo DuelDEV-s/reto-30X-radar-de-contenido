@@ -4,7 +4,7 @@ Base funcional para el Reto 30X: **Python 3.12 + FastAPI + React/TypeScript + Po
 
 Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integración real](docs/real-setup.md). Distingue la configuración ya disponible del desarrollo que todavía falta.
 
-**Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consulta Bright Data primero y Meta/YouTube oficiales como respaldo y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de Bright Data y respaldos](docs/bright-data.md). Sin credenciales se muestran los requisitos, sin inventar datos.
+**Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consulta Bright Data primero y Meta/YouTube oficiales como respaldo y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de Bright Data y respaldos](docs/bright-data.md). Sin credenciales se muestran los requisitos, sin inventar datos. Con observaciones ya guardadas, **Reinterpretar datos guardados** genera una propuesta específica sin nuevas consultas ni créditos de extracción.
 
 ## Arranque con Docker
 
@@ -45,7 +45,7 @@ La base usa la imagen oficial de PostgreSQL; los Dockerfiles propios están en `
 
 | Paso | Implementado | Punto de extensión |
 | --- | --- | --- |
-| 1 · Identidad | Nombre y perfiles, Bright Data configurable con Meta/YouTube de respaldo, JSON de análisis, propuesta por textos y reglas, revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
+| 1 · Identidad | Nombre y perfiles, Bright Data configurable con Meta/YouTube de respaldo, JSON de análisis, síntesis breve, pilares con evidencia, audiencias por validar y revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
 | 2 · Descubrimiento | Contrato v1, validación, procedencia, separación demo/público, idempotencia de lotes | Equipo del paso 2: entregar `BatchCreate` a `POST /api/brands/{id}/trend-batches` |
 | 3 · Priorización | Score explicable, aceleración por vistas/día, coincidencia de tópicos, pieza principal, historial, hipótesis y adaptación | `backend/app/services.py:analyze`: ampliar evidencia o incorporar explicaciones de un modelo |
 

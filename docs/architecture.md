@@ -31,3 +31,10 @@ flowchart LR
 5. Agregar autenticación, límites, eliminación/retención, paginación e ingesta asíncrona antes de compartir una instancia pública.
 
 No se estima saturación con los datos actuales: falta un denominador de cobertura y diversidad de publicaciones/fuentes. El momento, alcance original de la cuenta y distribución pagada tampoco están disponibles.
+
+
+### Interpretación local v2
+
+`app/interpretation.py` recibe el brief y resultados normalizados elegibles; no tiene cliente HTTP. Deduplica títulos/captions y textos repetidos, organiza conceptos entre sectores e intenciones editoriales y genera resumen, pilares y audiencias como hipótesis. Las referencias acompañan cada pilar y observación. Los datos no habilitados por la fuente no alimentan esta capa.
+
+`POST /api/brands/{id}/profiles/interpret` recalcula solo esta capa desde `profile_analyses`; no altera las fechas de las fuentes ni la identidad confirmada salvo aplicación explícita. El contrato de tendencias del paso 2 no cambia. El radar seguirá usando los tópicos de la identidad guardada después de que el equipo aplique y revise la propuesta.

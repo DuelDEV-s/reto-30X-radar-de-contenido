@@ -71,6 +71,36 @@ export type ProfileAnalysis = {
   identity_evidence: string[];
   opportunities: { platform: string; action: string; basis: string }[];
   method: string;
+  interpreted_at?: string;
+  interpretation?: {
+    version: string;
+    method: string;
+    local_focus: string | null;
+    facts: {
+      label: string;
+      value: string;
+      evidence: InterpretationEvidence[];
+    }[];
+    pillars: {
+      topic: string;
+      rationale: string;
+      idea: string;
+      measurement: string;
+      evidence: InterpretationEvidence[];
+    }[];
+    audience_hypotheses: {
+      role: string;
+      need: string;
+      evidence: InterpretationEvidence[];
+    }[];
+    coverage: Record<string, number>;
+    limitations: string[];
+  };
+};
+export type InterpretationEvidence = {
+  source_url: string | null;
+  source_kind: "brief" | "profile" | "post" | "manual";
+  excerpt: string;
 };
 export type Connector = {
   platform: string;

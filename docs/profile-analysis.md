@@ -14,7 +14,7 @@ Bright Data es el proveedor principal para ambas redes: seguir [su configuració
 | Instagram | Meta Business Discovery, API con Facebook Login | Biografía, seguidores y publicaciones disponibles, muestra de hasta 8 publicaciones públicas y sus textos/formatos | Requiere acceso profesional autorizado. Esta consulta no pide Insights privados y no entrega vistas: quedan en `null`. |
 | LinkedIn / TikTok | Pendiente | Enlace y descripción que aporte el equipo | Se muestran como conector no implementado, sin simular consulta. |
 
-Las vistas y seguidores no se suman entre redes ni se usan para inventar un score de rendimiento. La propuesta extrae tópicos por coincidencias de vocabulario en descripciones y piezas disponibles. La audiencia no se deduce como un hecho: si no se declara, queda por confirmar. No hay llamadas a un LLM en este flujo.
+Las vistas y seguidores no se suman entre redes ni se usan para inventar un score de rendimiento. La interpretación v2 sintetiza el contexto sin concatenar publicaciones, elimina textos repetidos y organiza conceptos e intenciones editoriales con evidencia. El vocabulario cubre varios sectores; un sector sin coincidencias se declara como pendiente de revisión. La audiencia no se deduce como un hecho: si no se declara, queda por confirmar. No hay llamadas a un LLM en este flujo.
 
 ## Configurar YouTube
 
@@ -108,3 +108,28 @@ Los datos ausentes se representan con `null`; los fallos de red, falta de permis
 ## Verificación disponible
 
 Las pruebas usan respuestas sintéticas de las APIs y cubren extracción, redacción de contactos, privacidad pública de videos, métricas ausentes, errores de proveedores, conservación de identidad confirmada y reutilización de consultas. Sin credenciales del equipo no se ha verificado el acceso en vivo a sus cuentas. Configurar una clave tampoco garantiza que un perfil concreto sea accesible con sus permisos.
+
+
+## Interpretación v2 sin nueva recolección
+
+En **Identidad de marca**, el botón **Reinterpretar datos guardados** usa exclusivamente las observaciones ya almacenadas. No consulta Bright Data, Meta, YouTube ni un modelo externo y no consume créditos de extracción. **Usar propuesta como borrador** también usa estos datos guardados; después se puede editar y confirmar la identidad.
+
+```text
+POST /api/brands/{id}/profiles/interpret
+{"apply_to_identity": false}
+```
+
+La ruta devuelve 409 si no existe un análisis guardado. `apply_to_identity: true` aplica la propuesta explícitamente como borrador. La acción por defecto conserva la identidad actual, incluso si ya está confirmada. Los timestamps de observación y `analyzed_at` permanecen intactos; `interpreted_at` registra cuándo se reinterpretaron los textos.
+
+El JSON añade `interpretation` con:
+
+- `facts`: oferta o temas explícitos y foco local comunicado, con fragmentos y referencias. Se distingue el brief, texto manual, biografía y publicación.
+- `pillars`: pilares propuestos, fundamento, idea editorial, qué medir y evidencia. Una pieza aislada ajena a la oferta no redefine los temas principales.
+- `audience_hypotheses`: ocasiones y necesidades por validar, sin inventar edad, género, poder adquisitivo ni compradores observados. La audiencia que declaró el equipo se conserva.
+- `coverage` y `limitations`: número de textos distintos y piezas disponibles, vistas o formatos ausentes y límites del método.
+
+El foco local se extrae de expresiones de servicio/ubicación, como «Domicilios Ibagué», no de menciones arbitrarias en un post viral. Una región general predeterminada puede proponerse más específica; una región explícita distinta se conserva y se señala la diferencia. El equipo revisa cobertura y pertinencia antes de confirmar.
+
+No se calculan rankings de publicaciones, crecimiento ni supuesta eficacia de un formato a partir de esta interpretación. Las ideas de contenido son propuestas para un experimento nuevo. Los contadores se muestran como contexto; no determinan el resumen ni las audiencias.
+
+Es un motor local de reglas y evidencias, con vocabulario ampliable; puede perder matices y no sustituye un análisis semántico con un modelo. El contrato estructurado permite añadir ese proveedor después conservando validación, citas y revisión humana.

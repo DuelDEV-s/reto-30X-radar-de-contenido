@@ -8,6 +8,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type { Brand, SocialProfile } from "./types";
+import InterpretationPanel from "./InterpretationPanel";
 
 const names: Record<string, string> = {
   instagram: "Instagram",
@@ -30,6 +31,7 @@ export default function ProfileAnalysisPanel({
   brand,
   busy,
   onAnalyze,
+  onInterpret,
 }: {
   brand: Brand;
   busy: boolean;
@@ -39,6 +41,7 @@ export default function ProfileAnalysisPanel({
     force: boolean,
     refreshBrightData?: boolean,
   ) => void;
+  onInterpret: (apply: boolean) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [profiles, setProfiles] = useState(brand.brief.profiles);
@@ -102,6 +105,21 @@ export default function ProfileAnalysisPanel({
           Consultar análisis
         </button>
       </div>
+      {!!data && (
+        <div className="form-actions">
+          <button
+            className="button"
+            disabled={busy}
+            onClick={() => onInterpret(false)}
+          >
+            Reinterpretar datos guardados
+          </button>
+          <small>
+            Usa la información disponible, sin consultar proveedores ni consumir
+            créditos de extracción.
+          </small>
+        </div>
+      )}
       {data?.profiles.some((p) => p.collection) && (
         <div className="form-actions">
           <button
@@ -294,24 +312,27 @@ export default function ProfileAnalysisPanel({
             </div>
             <p>{data.suggested_identity.summary}</p>
             <p className="muted">{data.method}</p>
+            <InterpretationPanel data={data} />
             <button
               className="button dark"
               disabled={busy || !canEnrich}
-              onClick={() => onAnalyze(brand.brief.profiles, true, false)}
+              onClick={() => onInterpret(true)}
             >
               <Check size={16} /> Usar propuesta como borrador
             </button>
           </div>
-          <div className="profile-opportunities">
-            <h3>Cómo potenciar el perfil</h3>
-            {data.opportunities.map((o, i) => (
-              <div key={i}>
-                <strong>{names[o.platform]}</strong>
-                <p>{o.action}</p>
-                <small>{o.basis}</small>
-              </div>
-            ))}
-          </div>
+          {!data.interpretation && (
+            <div className="profile-opportunities">
+              <h3>Cómo potenciar el perfil</h3>
+              {data.opportunities.map((o, i) => (
+                <div key={i}>
+                  <strong>{names[o.platform]}</strong>
+                  <p>{o.action}</p>
+                  <small>{o.basis}</small>
+                </div>
+              ))}
+            </div>
+          )}
           <details>
             <summary>Ver JSON estructurado del análisis</summary>
             <pre className="analysis-json">{JSON.stringify(data, null, 2)}</pre>

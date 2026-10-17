@@ -7,8 +7,8 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-from .schemas import BrandCreate, Identity, Persona, ProfileContent, ProfileMetric, ProfileResult
-from .services import draft_identity, tokens
+from .schemas import BrandCreate, ProfileContent, ProfileMetric, ProfileResult
+from .interpretation import interpret
 from .profile_common import ProviderError, clean_text, number
 from . import brightdata
 from .collection_jobs import MemoryJobStore
@@ -172,34 +172,11 @@ async def inspect_one(profile, client, store=None, budget=None, refresh_bright_d
         return fallback
 
 
-TOPIC_SIGNALS = {
-    "agentes de IA": {"agentes", "agents"}, "automatización": {"automatizacion", "automation", "automatizar"},
-    "IA en negocios": {"negocios", "empresas", "business"}, "productividad": {"productividad", "productivity"},
-    "inteligencia artificial": {"inteligencia", "artificial", "ia", "ai"},
-    "emprendimiento": {"emprendimiento", "emprendedores", "startup", "startups"},
-    "marketing": {"marketing"}, "programación": {"programacion", "coding", "software"},
-    "educación": {"educacion", "aprendizaje", "education"}, "finanzas": {"finanzas", "financiero", "finance"},
-}
-
-
-def enrich_identity(brief: BrandCreate, profiles: list[ProfileResult]):
-    identity = draft_identity(brief)
-    texts, references = [], []
-    for p in profiles:
-        if p.status == "ready" and p.usable_for_identity:
-            texts.append(p.description)
-            texts.extend(f"{c.title} {c.text}" for c in p.content_sample)
-            references.append(p.url)
-        if p.supplied_description:
-            texts.append(p.supplied_description)
-    combined = " ".join(texts)
-    found = [topic for topic, signals in TOPIC_SIGNALS.items() if tokens(combined) & signals]
-    if combined.strip():
-        identity.summary = ((brief.description + "\n\n" if brief.description else "") + "Contexto de perfiles (descripciones y muestra disponible): " + clean_text(combined, 3500))[:5000]
-        identity.topics = list(dict.fromkeys([*brief.topics, *found]))[:15] or ["por definir"]
-        identity.method = "profile_rules" if references else "brief_rules"
-        identity.personas = [Persona(role=identity.audience[:120], need="Hipótesis para validar con el equipo: encontrar aplicaciones concretas sobre " + ", ".join(identity.topics)[:350])]
-    return Identity.model_validate(identity.model_dump()), references
+def enrich_identity(brief, profiles):
+    """Compatibility helper; the complete result also includes evidence and pillars."""
+    from .schemas import Identity
+    data = interpret(brief, profiles)
+    return Identity.model_validate(data["suggested_identity"]), data["identity_evidence"]
 
 
 async def build_analysis(brief: BrandCreate, client=None, job_store=None, refresh_bright_data=False, allow_new_jobs=True):
@@ -219,25 +196,5 @@ async def build_analysis(brief: BrandCreate, client=None, job_store=None, refres
             profiles = await collect(c)
     else:
         profiles = await collect(client)
-    identity, references = enrich_identity(brief, profiles)
-    opportunities = []
-    for p in profiles:
-        if p.status != "ready":
-            opportunities.append({"platform": p.platform, "action": p.message, "basis": "Disponibilidad de la fuente; no se verificó este perfil."})
-        elif p.usable_for_identity:
-            observed = tokens(p.description + " " + " ".join(c.text + " " + c.title for c in p.content_sample))
-            themes = [t for t, signals in TOPIC_SIGNALS.items() if observed & signals]
-            formats = list(dict.fromkeys(c.format for c in p.content_sample))
-            if not p.description:
-                action = "Completar la biografía con la propuesta de valor de la marca, su audiencia y una acción concreta para el visitante."
-            elif themes:
-                action = f"Se detectan señales textuales de {', '.join(themes[:3])}. Probar una pieza con un caso concreto para {brief.audience or 'la audiencia que confirme el equipo'} y mantener esos pilares visibles en la biografía."
-                if formats:
-                    action += f" La muestra contiene estos formatos: {', '.join(formats)}; comparar alternativas mediante un experimento editorial."
-            else:
-                action = "Revisar con el equipo los pilares de contenido a partir de la biografía y la muestra; no hay coincidencias con el vocabulario temático actual."
-            opportunities.append({"platform": p.platform, "action": action, "basis": "Descripción y muestra pública de " + p.url + ". Hipótesis por reglas; no atribuye resultados a un formato."})
-        else:
-            opportunities.append({"platform": p.platform, "action": "Completar la habilitación de uso analítico antes de incorporar estos datos a la identidad.", "basis": "Datos mostrados solo como información de la fuente."})
     now = datetime.now(timezone.utc)
-    return {"schema_version": "1.0", "analyzed_at": now.isoformat(), "status": "pending" if any(p.status == "pending" for p in profiles) else "complete" if profiles and all(p.status == "ready" for p in profiles) else "partial" if any(p.status == "ready" for p in profiles) else "unavailable", "profiles": [p.model_dump(mode="json") for p in profiles], "suggested_identity": identity.model_dump(mode="json"), "identity_evidence": references, "opportunities": opportunities, "method": "Reglas léxicas sobre textos disponibles. Las métricas se muestran con su procedencia y no se convierten en scores de perfil. Audiencia y personas requieren revisión humana."}
+    return {"schema_version": "1.0", "analyzed_at": now.isoformat(), "status": "pending" if any(p.status == "pending" for p in profiles) else "complete" if profiles and all(p.status == "ready" for p in profiles) else "partial" if any(p.status == "ready" for p in profiles) else "unavailable", "profiles": [p.model_dump(mode="json") for p in profiles], **interpret(brief, profiles)}
