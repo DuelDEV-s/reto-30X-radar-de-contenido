@@ -9,12 +9,14 @@ from .schemas import BatchCreate, BrandCreate, Identity
 
 
 def draft_identity(brief: BrandCreate) -> Identity:
+    topics = brief.topics or ["por definir"]
+    audience = brief.audience or "Audiencia por confirmar"
     return Identity(
-        summary=brief.description,
-        audience=brief.audience,
+        summary=brief.description or "Identidad pendiente de información pública del perfil y revisión del equipo.",
+        audience=audience,
         region=brief.region,
-        topics=brief.topics,
-        personas=[{"role": brief.audience[:120], "need": f"Encontrar contenido útil sobre {', '.join(brief.topics)} en {brief.region}."[:500]}],
+        topics=topics,
+        personas=[{"role": audience[:120], "need": f"Validar necesidades de esta audiencia sobre {', '.join(topics)} en {brief.region}."[:500]}],
         status="draft", method="brief_rules",
     )
 

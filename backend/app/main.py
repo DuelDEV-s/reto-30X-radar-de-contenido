@@ -9,10 +9,12 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .database import Brand, TrendBatch, get_session
+from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
-from .schemas import BatchCreate, BrandCreate, Identity, Platform
+from .schemas import BatchCreate, BrandCreate, Identity, Platform, ProfileAnalysisRequest
 from .services import analyze, draft_identity
+from .profiles import build_analysis, connector_status, TTL
+from datetime import datetime, timezone
 
 app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Ingesta v1 para el equipo del paso 2. Sin scraping ni datos personales.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
@@ -26,8 +28,38 @@ def get_brand(brand_id, db):
     return brand
 
 
-def brand_output(brand):
-    return {"id": brand.id, "brief": brand.brief, "identity": brand.identity, "created_at": brand.created_at}
+def brand_output(brand, db):
+    analysis = db.get(ProfileAnalysis, brand.id)
+    data = dict(analysis.data) if analysis else None
+    if data:
+        data.pop("input_fingerprint", None)
+        data["stale"] = datetime.now(timezone.utc) - datetime.fromisoformat(data["analyzed_at"]) > TTL
+    return {"id": brand.id, "brief": brand.brief, "identity": brand.identity, "created_at": brand.created_at, "profile_analysis": data}
+
+
+async def inspect_brand(brand, db, request):
+    values = dict(brand.brief)
+    if request.profiles is not None:
+        values["profiles"] = [p.model_dump(mode="json") for p in request.profiles]
+        values["brand_accounts_confirmed"] = request.brand_accounts_confirmed
+    brief = BrandCreate.model_validate(values)
+    fingerprint = hashlib.sha256(json.dumps({"brief": brief.model_dump(mode="json"), "connectors": connector_status()}, sort_keys=True).encode()).hexdigest()
+    row = db.get(ProfileAnalysis, brand.id)
+    fresh = row and datetime.now(timezone.utc) - datetime.fromisoformat(row.data["analyzed_at"]) < TTL
+    if request.force or not fresh or row.data.get("input_fingerprint") != fingerprint:
+        data = await build_analysis(brief)
+        data["input_fingerprint"] = fingerprint
+        if row:
+            row.data = data
+            row.analyzed_at = datetime.now(timezone.utc)
+        else:
+            row = ProfileAnalysis(brand_id=brand.id, data=data)
+            db.add(row)
+    brand.brief = brief.model_dump(mode="json")
+    if request.apply_to_identity:
+        brand.identity = row.data["suggested_identity"]
+    db.commit()
+    return brand_output(brand, db)
 
 
 def save_brand(brief, db):
@@ -64,18 +96,21 @@ def health(db: DB):
 
 
 @app.post("/api/brands", status_code=201, tags=["step-1"])
-def create_brand(brief: BrandCreate, db: DB):
-    return brand_output(save_brand(brief, db))
+async def create_brand(brief: BrandCreate, db: DB):
+    brand = save_brand(brief, db)
+    if brief.profiles:
+        return await inspect_brand(brand, db, ProfileAnalysisRequest(apply_to_identity=True))
+    return brand_output(brand, db)
 
 
 @app.get("/api/brands", tags=["step-1"])
 def list_brands(db: DB):
-    return [brand_output(b) for b in db.scalars(select(Brand).order_by(Brand.created_at.desc())).all()]
+    return [brand_output(b, db) for b in db.scalars(select(Brand).order_by(Brand.created_at.desc())).all()]
 
 
 @app.get("/api/brands/{brand_id}", tags=["step-1"])
 def read_brand(brand_id: str, db: DB):
-    return brand_output(get_brand(brand_id, db))
+    return brand_output(get_brand(brand_id, db), db)
 
 
 @app.put("/api/brands/{brand_id}/identity", tags=["step-1"])
@@ -83,7 +118,21 @@ def update_identity(brand_id: str, identity: Identity, db: DB):
     brand = get_brand(brand_id, db)
     brand.identity = identity.model_copy(update={"method": "human_review"}).model_dump(mode="json")
     db.commit()
-    return brand_output(brand)
+    return brand_output(brand, db)
+
+
+@app.get("/api/profile-connectors", tags=["step-1"])
+def profile_connectors():
+    return connector_status()
+
+
+@app.post("/api/brands/{brand_id}/profiles/analyze", tags=["step-1"])
+async def analyze_profiles(brand_id: str, request: ProfileAnalysisRequest, db: DB):
+    brand = get_brand(brand_id, db)
+    try:
+        return await inspect_brand(brand, db, request)
+    except ValueError:
+        raise HTTPException(422, "Revisa los perfiles y confirma que son cuentas públicas de la marca.")
 
 
 @app.post("/api/brands/{brand_id}/trend-batches", status_code=201, tags=["step-2-contract"])
@@ -117,4 +166,4 @@ def report(brand_id: str, db: DB, batch_id: str | None = None, platform: Platfor
 def demo(db: DB):
     brand = save_brand(demo_brief(), db)
     batch = save_batch(brand.id, demo_batch(), db)
-    return {"brand": brand_output(brand), "batch_id": batch["id"]}
+    return {"brand": brand_output(brand, db), "batch_id": batch["id"]}

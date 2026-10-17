@@ -1,5 +1,14 @@
 # Validación local · 17 de octubre de 2026
 
+## Actualización: análisis automático de perfiles
+
+- 30 pruebas de backend aprobadas, incluidas respuestas sintéticas de YouTube e Instagram, estados sin credenciales, fallos de proveedores, contadores ausentes, reutilización de consultas y conservación de identidad confirmada.
+- Compilación de React y reconstrucción del entorno Docker aprobadas. Migración 002 aplicada en PostgreSQL; `alembic check` sin diferencias.
+- Creación desde navegador con solo nombre y dos enlaces probada contra Docker. Sin claves configuradas, el resultado identifica ambas fuentes como pendientes y conserva métricas ausentes en lugar de generar datos.
+- No se han verificado consultas en vivo a los perfiles del equipo: no se proporcionaron credenciales. Los casos con datos extraídos en las pruebas son fixtures sintéticos.
+
+## Base inicial
+
 Comprobado en Windows con Node 24, Python 3.12 y Docker Desktop (motor Linux):
 
 - 14 pruebas API/cálculo aprobadas con `python -m pytest -q`. Un aviso de deprecación de la dependencia AnyIO/Starlette, sin fallo de pruebas.

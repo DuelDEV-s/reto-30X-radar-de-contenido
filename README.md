@@ -4,6 +4,8 @@ Base funcional para el Reto 30X: **Python 3.12 + FastAPI + React/TypeScript + Po
 
 Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integración real](docs/real-setup.md). Distingue la configuración ya disponible del desarrollo que todavía falta.
 
+**Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consultan los conectores oficiales configurados y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de YouTube e Instagram](docs/profile-analysis.md). Sin credenciales se muestran los requisitos, sin inventar datos.
+
 ## Arranque con Docker
 
 Requiere Docker Desktop con el motor Linux activo y Docker Compose v2. Desde la raíz:
@@ -43,11 +45,11 @@ La base usa la imagen oficial de PostgreSQL; los Dockerfiles propios están en `
 
 | Paso | Implementado | Punto de extensión |
 | --- | --- | --- |
-| 1 · Identidad | Formulario, referencias públicas aportadas, borrador por reglas, personas editables, confirmación y persistencia | `backend/app/services.py:draft_identity`: conectar un proveedor IA/JEV y validar su salida con `Identity` |
+| 1 · Identidad | Nombre y perfiles, consulta oficial YouTube/Instagram configurable, JSON de análisis, propuesta por textos y reglas, revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
 | 2 · Descubrimiento | Contrato v1, validación, procedencia, separación demo/público, idempotencia de lotes | Equipo del paso 2: entregar `BatchCreate` a `POST /api/brands/{id}/trend-batches` |
 | 3 · Priorización | Score explicable, aceleración por vistas/día, coincidencia de tópicos, pieza principal, historial, hipótesis y adaptación | `backend/app/services.py:analyze`: ampliar evidencia o incorporar explicaciones de un modelo |
 
-**No hay scraping, navegación de perfiles ni llamadas a modelos de IA.** Los enlaces y descripciones son aportados por el equipo; no se afirma haber leído esos perfiles. El borrador de identidad usa el brief, no analiza automáticamente las descripciones de perfiles. Las explicaciones y adaptaciones son plantillas editoriales transparentes. El paso 2 es el encargado de conseguir contenido real mediante fuentes permitidas. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
+**No hay scraping ni llamadas a modelos de IA.** Los enlaces ahora se resuelven mediante APIs oficiales configuradas para obtener contexto público de la marca. El resultado declara qué fuente se consultó, qué datos faltan y qué textos pueden incorporarse a la identidad. LinkedIn y TikTok aún no tienen conector. Las explicaciones del radar siguen siendo plantillas editoriales. El paso 2 continúa encargado del descubrimiento de tendencias. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
 
 El prototipo responde: **“¿Qué tópicos de este lote muestran mayor aceleración observable, cuánto coinciden con mi marca y qué experimento editorial puedo hacer?”** No responde con fiabilidad cuáles son los 10 temas que más crecen en toda una plataforma. No estima saturación ni atribuye causalidad a gancho/formato. La confianza describe cantidad de evidencia, no probabilidad estadística.
 

@@ -1,6 +1,6 @@
 # Pasar de la demo a datos reales
 
-La aplicación ya arranca y guarda información real en PostgreSQL. Lo pendiente es integrar la adquisición de contenido y un proveedor de IA. **Agregar claves al `.env` no implementa esas integraciones.** Esta guía separa configuración existente de desarrollo pendiente.
+La aplicación ya arranca y guarda información en PostgreSQL. El análisis automático de perfiles de la marca tiene conectores oficiales configurables para YouTube e Instagram: seguir [su guía específica](profile-analysis.md). El descubrimiento del paso 2 y el proveedor IA/JEV siguen pendientes de integración. Las claves por sí solas no implementan estos últimos módulos.
 
 ## 1. Preparar el entorno del equipo
 
@@ -16,7 +16,7 @@ docker compose ps
 Invoke-RestMethod http://localhost:8000/api/health
 ```
 
-Si ya existe `.env`, conservarlo. Los únicos valores implementados hoy son los de `.env.example`: base de datos y configuración local. En Compose, el origen CORS está fijado en `compose.yaml`; la variable de la plantilla sirve al backend ejecutado fuera de Docker cuando se exporta en su terminal. `.env` no se lee automáticamente en Python local.
+Si ya existe `.env`, conservarlo. La plantilla incluye base de datos, configuración local y credenciales de los conectores de perfiles. En Compose, el origen CORS está fijado en `compose.yaml`; la variable de la plantilla sirve al backend ejecutado fuera de Docker cuando se exporta en su terminal. `.env` no se lee automáticamente en Python local.
 
 Interfaz: http://localhost:5173. Swagger: http://localhost:8000/docs. PostgreSQL desde el host: `localhost:15432`; desde el contenedor API: `db:5432`. En Docker no usar la URL SQLite de la plantilla para reemplazar la conexión PostgreSQL que ya configura Compose.
 
@@ -26,7 +26,7 @@ La contraseña de ejemplo es para desarrollo local. Establecer la propia antes d
 
 En **Nueva marca**, introducir nombre, propuesta, audiencia, región y tópicos. Añadir referencias públicas de la organización y sus descripciones, revisando que no incluyan datos personales.
 
-En **Identidad de marca**, corregir definición y personas, y guardar la confirmación. Hoy esto funciona con revisión humana: los enlaces no se navegan y las descripciones de perfiles no se analizan automáticamente. Este paso no necesita ninguna API key.
+Con nombre y enlaces se puede iniciar una marca; los demás textos son opcionales. Las APIs oficiales configuradas producen un JSON del perfil y un borrador con contexto textual. Si faltan claves se muestra el requisito. En **Identidad de marca**, revisar definición, tópicos y personas y confirmar. El trabajo manual sigue disponible sin API key.
 
 ## 3. Conectar la fuente de los compañeros — paso 2
 
@@ -76,11 +76,11 @@ Elegir proveedor y modelo, obtener credenciales de servidor y confirmar su endpo
 Desarrollo pendiente en `backend/app/services.py`:
 
 - **`draft_identity`:** enviar el brief y los textos públicos aportados para proponer definición, tópicos y segmentos. Validar la respuesta con `Identity`, mantenerla en borrador y conservar revisión humana.
-- **Esquema de procedencia:** `Identity.method` hoy solo admite `brief_rules` y `human_review`; ampliarlo y actualizar los tipos del frontend si se añade generación con modelo. Registrar proveedor/modelo de forma explícita.
+- **Esquema de procedencia:** `Identity.method` admite `brief_rules`, `profile_rules` y `human_review`; ampliarlo si se añade generación con modelo y registrar proveedor/modelo de forma explícita.
 - **`analyze`:** conservar los cálculos numéricos en Python. Pedir al modelo hipótesis editoriales y adaptaciones basadas en la evidencia disponible, con referencias a las piezas y sin atribuir causalidad.
 - Validar la salida, limitar tokens/costo, añadir timeout y manejar errores. Si se usan reglas como alternativa, identificarlas en el resultado y actualizar los textos de la interfaz que hoy dicen que no hay IA.
 
-Variables **propuestas, aún no implementadas**: `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` y las credenciales del recolector, por ejemplo `YOUTUBE_API_KEY` si corresponde. Para usarlas hay que añadir lectura de configuración al backend/adaptador y pasarlas expresamente mediante `environment` o `env_file` en el servicio correspondiente de Compose. Nunca incluir claves en `VITE_*`, Git, payloads de procedencia o logs. La key de la fuente puede quedarse exclusivamente en el proceso recolector si este vive fuera del backend.
+Variables **propuestas, aún no implementadas para un LLM**: `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`. Necesitan lectura en el backend y paso explícito al servicio Compose. Las variables de perfil `YOUTUBE_API_KEY`, `YOUTUBE_ANALYTICS_APPROVED`, `META_ACCESS_TOKEN`, `META_IG_USER_ID` y `META_GRAPH_VERSION` ya se leen y se pasan al backend. El recolector del paso 2 puede tener sus propias credenciales. Nunca incluir claves en `VITE_*`, Git, payloads de procedencia o logs.
 
 ## 6. Verificar el circuito completo
 

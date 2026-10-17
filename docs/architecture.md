@@ -19,8 +19,8 @@ flowchart LR
 - Esquemas Pydantic estrictos como contrato compartido. Persistencia SQLAlchemy y migraciones Alembic; las tablas almacenan brief, identidad y lotes versionados como JSON. Diseño simple para el hackathon; si crece el volumen, normalizar piezas y observaciones para consultas e índices.
 - PostgreSQL en Compose, SQLite opcional para pruebas y desarrollo. Las migraciones son explícitas, no se crean tablas durante cada petición.
 - Docker multietapa para React y Nginx con proxy `/api`. Backend con usuario sin privilegios. PostgreSQL usa su imagen oficial y volumen nombrado.
-- Las marcas no se extraen a partir de una URL: el usuario aporta el contexto y confirma la identidad. `draft_identity` es el punto para sustituir reglas por un modelo; debe devolver un `Identity` validado y conservar procedencia.
-- No existen adaptadores de scraping. Las URLs son evidencia declarada; el backend no hace peticiones a ellas. El paso 2 debe garantizar las condiciones de uso de cada fuente.
+- El paso 1 consulta perfiles de marca mediante los conectores oficiales configurados de `app/profiles.py`, guarda su JSON en `profile_analyses` y propone identidad a partir de textos permitidos. La migración 002 agrega el último análisis por marca. La revisión humana conserva la autoridad sobre identidades confirmadas.
+- No existen adaptadores de scraping. Las URLs se validan y sus identificadores se traducen a endpoints oficiales fijos, sin visitar directamente enlaces arbitrarios. El paso 2 continúa separado y debe garantizar las condiciones de uso de sus fuentes.
 
 ## Evolución sugerida después de integrar
 

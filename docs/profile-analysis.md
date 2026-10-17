@@ -1,0 +1,108 @@
+# Análisis automático de perfiles · paso 1
+
+El flujo ahora es **nombre y redes → consulta oficial → JSON de perfil → propuesta de identidad → revisión → radar**. Se ejecuta al crear una marca con enlaces. También se pueden editar los enlaces y volver a consultar desde Identidad de marca.
+
+No es el descubrimiento de tendencias del paso 2: aquí se entiende la propia marca. Los compañeros siguen entregando sus lotes de tendencias con el contrato existente.
+
+## Qué está implementado
+
+| Red | Conector | Información solicitada | Límites |
+| --- | --- | --- | --- |
+| YouTube | Data API v3 | Descripción del canal, vistas acumuladas, suscriptores disponibles, total de videos y hasta 8 videos públicos recientes con sus vistas | Solo enlaces de canal `/@handle`, `/channel/UC…` o `/user/…`. No infiere Shorts. Las condiciones analíticas se configuran aparte. |
+| Instagram | Meta Business Discovery, API con Facebook Login | Biografía, seguidores y publicaciones disponibles, muestra de hasta 8 publicaciones públicas y sus textos/formatos | Requiere acceso profesional autorizado. Esta consulta no pide Insights privados y no entrega vistas: quedan en `null`. |
+| LinkedIn / TikTok | Pendiente | Enlace y descripción que aporte el equipo | Se muestran como conector no implementado, sin simular consulta. |
+
+Las vistas y seguidores no se suman entre redes ni se usan para inventar un score de rendimiento. La propuesta extrae tópicos por coincidencias de vocabulario en descripciones y piezas disponibles. La audiencia no se deduce como un hecho: si no se declara, queda por confirmar. No hay llamadas a un LLM en este flujo.
+
+## Configurar YouTube
+
+1. Crear un proyecto en Google Cloud y habilitar YouTube Data API v3.
+2. Crear una clave y limitarla a esa API, con restricciones de aplicación apropiadas para su servidor.
+3. En el `.env` local del repositorio, establecer `YOUTUBE_API_KEY`.
+4. Mantener `YOUTUBE_ANALYTICS_APPROVED=false` mientras no se hayan satisfecho las condiciones aplicables al uso analítico. En ese estado se muestran los datos de la fuente, pero no se incorporan a la propuesta de identidad.
+5. Si ya se ha obtenido la habilitación aplicable, el equipo puede declarar `YOUTUBE_ANALYTICS_APPROVED=true`. Es una declaración de configuración: no solicita ni concede permisos ante YouTube.
+
+Documentación: [credenciales y API](https://developers.google.com/youtube/data/getting-started), [búsqueda del canal por handle](https://developers.google.com/youtube/data/reference/rest/v3/channels/list), [condiciones de métricas derivadas](https://developers.google.com/youtube/terms/derived-metrics-policy).
+
+## Configurar Instagram
+
+1. Preparar la aplicación de Meta y el acceso **Instagram API con Facebook Login**. Este conector no usa Instagram Login ni contraseñas o cookies de visitantes.
+2. Disponer de la cuenta profesional vinculada a una página y de los permisos de lectura aplicables a Business Discovery para esa aplicación. Revisar los requisitos de desarrollo/revisión en Meta para los perfiles objetivo.
+3. Obtener el token autorizado y el ID de la cuenta profesional que realiza la consulta. Solo configurar los valores en el backend.
+4. Elegir una versión Graph API soportada por su aplicación; no copiar el valor ficticio `v99.0` usado en las pruebas.
+5. Añadir al `.env`:
+
+```dotenv
+META_ACCESS_TOKEN=VALOR_LOCAL_NO_PUBLICAR
+META_IG_USER_ID=ID_NUMERICO_DE_LA_CUENTA_PROFESIONAL
+META_GRAPH_VERSION=VERSION_SOPORTADA_POR_SU_APP
+```
+
+La consulta usa el username de la URL de la marca en `business_discovery.username(...)`. No accede a perfiles personales ni intenta saltar una pantalla de login. Las credenciales de una aplicación son para la API autorizada; el contenido consultado debe seguir siendo público.
+
+Fuentes de Meta: [guía de Business Discovery](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-facebook-login/business-discovery/), [colección oficial de Instagram](https://www.postman.com/meta/instagram/folder/u4g5a2a/instagram-api-with-facebook-login).
+
+## Aplicar la configuración
+
+Las variables ya están conectadas al servicio API en `compose.yaml`. Una vez completado el `.env`:
+
+```powershell
+docker compose up --build -d
+Invoke-RestMethod http://localhost:8000/api/profile-connectors
+```
+
+La respuesta del segundo comando indica qué conectores están configurados y qué nombres de variables faltan, sin devolver sus valores. No publicar la salida de `docker compose config` después de introducir claves: puede contener los secretos interpolados.
+
+En la interfaz, crear una marca con nombre, enlaces y confirmación de que son cuentas públicas de la organización. La descripción, audiencia y tópicos manuales son opcionales. Si faltan credenciales se guarda la marca y se muestra la configuración requerida por red. Cuando se añadan las claves, usar **Analizar perfiles**; no hace falta volver a crearla.
+
+## JSON e integración
+
+`GET /api/brands/{id}` incluye `profile_analysis`. Ejemplo de forma, con valores deliberadamente ausentes:
+
+```json
+{
+  "schema_version": "1.0",
+  "analyzed_at": "FECHA_REAL_DE_CONSULTA",
+  "status": "unavailable",
+  "profiles": [{
+    "platform": "instagram",
+    "url": "https://www.instagram.com/marca",
+    "status": "requires_configuration",
+    "provider": "meta_business_discovery",
+    "description": "",
+    "metrics": {"views": null, "followers": null, "posts": null},
+    "content_sample": [],
+    "usable_for_identity": false,
+    "message": "Configuración pendiente"
+  }],
+  "suggested_identity": {},
+  "identity_evidence": [],
+  "opportunities": []
+}
+```
+
+Es un esquema ilustrativo reducido, no un payload para importar. En la interfaz se puede ver y descargar el JSON completo del análisis real de cada marca.
+
+Actualizar/analizar:
+
+```text
+POST /api/brands/{brand_id}/profiles/analyze
+{"force": true}
+```
+
+También acepta `profiles`, `brand_accounts_confirmed` y `apply_to_identity`. Al reemplazar enlaces se debe confirmar que son cuentas públicas de marca. Las rutas de red se resuelven a endpoints oficiales fijos; el servidor no visita directamente las URLs aportadas.
+
+Se conserva el resultado más reciente de la consulta y se reutiliza durante 15 minutos para reducir peticiones; `force: true` vuelve a consultar. Cambiar la configuración de disponibilidad invalida esa reutilización. No se crea historial de métricas del perfil en esta tabla. Si se almacenan datos de fuentes reales a largo plazo, implementar y verificar además sus reglas de retención y eliminación; esta versión todavía no incluye una purga programada.
+
+## Cómo mejora la identidad y las recomendaciones
+
+- Al crear la marca, los textos que puedan usarse se incorporan automáticamente al borrador y sugieren tópicos del vocabulario actual.
+- Al actualizar perfiles, se muestra una propuesta separada. Una identidad confirmada no cambia hasta pulsar **Usar propuesta como borrador** y revisarla.
+- Los tópicos de la identidad alimentan la afinidad del radar existente. Las métricas de perfil se muestran como contexto observado, no como evidencia de tendencia semanal.
+- Las oportunidades de mejora se basan en la biografía y la muestra: completar una biografía vacía, hacer visibles los pilares detectados y proponer experimentos de formato para la audiencia declarada.
+
+Los datos ausentes se representan con `null`; los fallos de red, falta de permisos y conectores pendientes tienen estados explícitos. Los errores de proveedores no se guardan en bruto, para no filtrar tokens. Se omiten correos y teléfonos reconocibles de textos obtenidos; eso no sustituye la revisión de que los perfiles sean institucionales y los textos no contengan otros datos personales.
+
+## Verificación disponible
+
+Las pruebas usan respuestas sintéticas de las APIs y cubren extracción, redacción de contactos, privacidad pública de videos, métricas ausentes, errores de proveedores, conservación de identidad confirmada y reutilización de consultas. Sin credenciales del equipo no se ha verificado el acceso en vivo a sus cuentas. Configurar una clave tampoco garantiza que un perfil concreto sea accesible con sus permisos.

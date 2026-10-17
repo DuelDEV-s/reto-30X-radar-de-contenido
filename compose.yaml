@@ -20,6 +20,11 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD:-radar_local_change_me}@db:5432/${POSTGRES_DB:-radar}
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      YOUTUBE_ANALYTICS_APPROVED: ${YOUTUBE_ANALYTICS_APPROVED:-false}
+      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+      META_IG_USER_ID: ${META_IG_USER_ID:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
