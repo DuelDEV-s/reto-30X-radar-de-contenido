@@ -21,7 +21,17 @@ import {
   ScanLine,
 } from "lucide-react";
 import { api } from "./types";
-import type { Brand, Batch, Report, Topic, Identity, Point } from "./types";
+import type {
+  Brand,
+  Batch,
+  Report,
+  Topic,
+  Identity,
+  Point,
+  Connector,
+  SocialProfile,
+} from "./types";
+import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
 
 const compact = (n: number) =>
   new Intl.NumberFormat("es", {
@@ -265,6 +275,30 @@ export default function App() {
       setNotice("Identidad guardada.");
     });
   }
+  async function analyzeProfiles(
+    profiles: SocialProfile[],
+    apply: boolean,
+    force: boolean,
+  ) {
+    await run(async () => {
+      const data = await api<Brand>(`/brands/${brand!.id}/profiles/analyze`, {
+        method: "POST",
+        body: JSON.stringify({
+          profiles,
+          brand_accounts_confirmed: true,
+          apply_to_identity: apply,
+          force,
+        }),
+      });
+      setBrand(data);
+      setBrands((items) => items.map((b) => (b.id === data.id ? data : b)));
+      setNotice(
+        apply
+          ? "Propuesta aplicada como borrador. Revísala y confirma la identidad."
+          : "Consulta terminada. Revisa los datos y el estado de cada fuente.",
+      );
+    });
+  }
   async function importBatch(raw: string) {
     await run(async () => {
       const data = await api<{ id: string }>(
@@ -478,7 +512,7 @@ export default function App() {
                   </button>
                 </div>
                 <small>
-                  Sin claves de API · Sin scraping · Evidencia visible
+                  Demo sin claves de API · Sin scraping · Evidencia visible
                 </small>
               </div>
               <div className="radar-art" aria-hidden="true">
@@ -497,9 +531,10 @@ export default function App() {
             </section>
           ) : tab === "identity" ? (
             <IdentityEditor
-              key={brand.id + brand.identity.status + brand.identity.summary}
+              key={brand.id + JSON.stringify(brand.identity)}
               brand={brand}
               onSave={saveIdentity}
+              onAnalyze={analyzeProfiles}
               busy={busy}
             />
           ) : tab === "integration" ? (
@@ -772,8 +807,8 @@ export default function App() {
             <div className="eyebrow">PASO 01</div>
             <h2 id="create-title">Dale contexto a tu radar.</h2>
             <p>
-              Describe tu marca. Los enlaces son referencias; no se navegan
-              automáticamente.
+              Agrega las redes de tu marca. Consultaremos las fuentes públicas
+              configuradas para preparar su identidad.
             </p>
             {error && (
               <div className="alert error" role="alert">
@@ -906,6 +941,18 @@ function CreateForm({
   busy: boolean;
   onCreate: (body: unknown) => void;
 }) {
+  const [connectors, setConnectors] = useState<Connector[]>([]);
+  useEffect(() => {
+    let active = true;
+    api<Connector[]>("/profile-connectors")
+      .then((items) => {
+        if (active) setConnectors(items);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
   function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
@@ -921,8 +968,12 @@ function CreateForm({
       description: f.get("description"),
       audience: f.get("audience"),
       region: f.get("region"),
-      topics: String(f.get("topics")).split(","),
+      topics: String(f.get("topics") || "")
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean),
       profiles,
+      brand_accounts_confirmed: f.get("confirmed") === "on",
     });
   }
   return (
@@ -937,74 +988,101 @@ function CreateForm({
           maxLength={100}
         />
       </label>
-      <label>
-        ¿Qué hace y qué aporta?
-        <textarea
-          name="description"
-          placeholder="Describe su propuesta y el contenido que produce…"
-          required
-          minLength={20}
-          maxLength={5000}
-        />
-      </label>
-      <div className="form-grid">
-        <label>
-          Audiencia
-          <input
-            name="audience"
-            placeholder="Líderes y equipos que aprenden IA"
-            required
-            minLength={5}
-            maxLength={1000}
-          />
-        </label>
-        <label>
-          Región
-          <input
-            name="region"
-            defaultValue="Latinoamérica"
-            required
-            minLength={2}
-            maxLength={100}
-          />
-        </label>
+      <div className="profile-form-intro">
+        <h3>Redes sociales de la marca</h3>
+        <p>
+          Agrega uno o varios perfiles. La consulta se ejecuta al crear la
+          marca; si falta acceso, verás qué configurar.
+        </p>
       </div>
-      <label>
-        Tópicos separados por comas
-        <input
-          name="topics"
-          placeholder="agentes de IA, automatización, negocios"
-          required
-          maxLength={1500}
-        />
+      {Object.entries(platforms).map(([p, label]) => {
+        const connector = connectors.find((c) => c.platform === p);
+        return (
+          <label key={p}>
+            {label}
+            <input
+              name={p}
+              type="url"
+              placeholder={
+                p === "youtube"
+                  ? "https://www.youtube.com/@tu-marca"
+                  : `https://www.${p}.com/tu-marca`
+              }
+              maxLength={500}
+            />
+            <small className="connector-status">
+              {connector?.configured
+                ? "Conector configurado"
+                : connector?.missing.length
+                  ? "Requiere credenciales de servidor"
+                  : "Conector automático aún no disponible"}
+            </small>
+          </label>
+        );
+      })}
+      <label className="checkbox-label">
+        <input name="confirmed" type="checkbox" /> Confirmo que los enlaces
+        corresponden a cuentas públicas de la marca, sin perfiles personales.
       </label>
       <details>
-        <summary>Agregar perfiles y descripciones públicas (opcional)</summary>
-        {Object.entries(platforms).map(([p, label]) => (
-          <div className="profile-fields" key={p}>
-            <label>
-              {label}
-              <input
-                name={p}
-                type="url"
-                placeholder={`https://www.${p}.com/tu-marca`}
-                maxLength={500}
-              />
-            </label>
-            <label>
-              Descripción pública de {label}
-              <textarea
-                name={`${p}_description`}
-                placeholder="Texto de la marca, sin datos personales"
-                maxLength={3000}
-              />
-            </label>
-          </div>
-        ))}
+        <summary>Añadir contexto adicional (opcional)</summary>
+        <label>
+          ¿Qué hace y qué aporta?
+          <textarea
+            name="description"
+            placeholder="Describe su propuesta y el contenido que produce…"
+            maxLength={5000}
+          />
+        </label>
+        <div className="form-grid">
+          <label>
+            Audiencia
+            <input
+              name="audience"
+              placeholder="Líderes y equipos que aprenden IA"
+              maxLength={1000}
+            />
+          </label>
+          <label>
+            Región
+            <input
+              name="region"
+              defaultValue="Latinoamérica"
+              required
+              minLength={2}
+              maxLength={100}
+            />
+          </label>
+        </div>
+        <label>
+          Tópicos separados por comas
+          <input
+            name="topics"
+            placeholder="agentes de IA, automatización, negocios"
+            maxLength={1500}
+          />
+        </label>
+        <details>
+          <summary>Aportar descripciones públicas manualmente</summary>
+          {Object.entries(platforms).map(([p, label]) => (
+            <div className="profile-fields" key={p}>
+              <label>{label}</label>
+              <label>
+                Descripción pública de {label}
+                <textarea
+                  name={`${p}_description`}
+                  placeholder="Texto de la marca, sin datos personales"
+                  maxLength={3000}
+                />
+              </label>
+            </div>
+          ))}
+        </details>
       </details>
       <p className="muted">
-        Se genera un borrador por reglas a partir de tu brief. No se usan
-        modelos de IA ni se verifican perfiles.
+        Nombre + perfiles es suficiente para empezar. Las credenciales se
+        configuran en el servidor. La propuesta usa textos disponibles y reglas;
+        no inventa vistas ni audiencia.
       </p>
       <button className="button dark full" disabled={busy}>
         {busy ? (
@@ -1012,7 +1090,7 @@ function CreateForm({
         ) : (
           <Fingerprint size={17} />
         )}{" "}
-        Crear identidad inicial
+        {busy ? "Consultando perfiles…" : "Analizar redes y crear marca"}
       </button>
     </form>
   );
@@ -1021,174 +1099,190 @@ function CreateForm({
 function IdentityEditor({
   brand,
   onSave,
+  onAnalyze,
   busy,
 }: {
   brand: Brand;
   onSave: (value: Identity) => void;
+  onAnalyze: (
+    profiles: SocialProfile[],
+    apply: boolean,
+    force: boolean,
+  ) => void;
   busy: boolean;
 }) {
   const [value, setValue] = useState(brand.identity);
   const edit = (key: keyof Identity, v: unknown) =>
     setValue((x) => ({ ...x, [key]: v }));
   return (
-    <section className="identity-layout">
-      <div className="panel">
-        <div className="eyebrow">PASO 01 · IDENTIDAD DE MARCA</div>
-        <h2>{brand.brief.name}</h2>
-        <p className="muted">
-          {value.status === "draft"
-            ? "Borrador para revisar con tu equipo."
-            : "Identidad confirmada por tu equipo."}{" "}
-          Las personas son segmentos de audiencia, sin datos personales.
-        </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSave({ ...value, status: "confirmed", method: "human_review" });
-          }}
-        >
-          <label>
-            Definición general
-            <textarea
-              rows={4}
-              value={value.summary}
-              onChange={(e) => edit("summary", e.target.value)}
-              required
-              minLength={10}
-              maxLength={5000}
-            />
-          </label>
-          <div className="form-grid">
+    <>
+      <ProfileAnalysisPanel
+        key={brand.id + JSON.stringify(brand.brief.profiles)}
+        brand={brand}
+        busy={busy}
+        onAnalyze={onAnalyze}
+      />
+      <section className="identity-layout">
+        <div className="panel">
+          <div className="eyebrow">PASO 01 · IDENTIDAD DE MARCA</div>
+          <h2>{brand.brief.name}</h2>
+          <p className="muted">
+            {value.status === "draft"
+              ? "Borrador para revisar con tu equipo."
+              : "Identidad confirmada por tu equipo."}{" "}
+            Las personas son segmentos de audiencia, sin datos personales.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSave({ ...value, status: "confirmed", method: "human_review" });
+            }}
+          >
             <label>
-              Audiencia
-              <input
-                value={value.audience}
-                onChange={(e) => edit("audience", e.target.value)}
+              Definición general
+              <textarea
+                rows={4}
+                value={value.summary}
+                onChange={(e) => edit("summary", e.target.value)}
                 required
-                minLength={5}
-                maxLength={1000}
+                minLength={10}
+                maxLength={5000}
               />
             </label>
-            <label>
-              Región
-              <input
-                value={value.region}
-                onChange={(e) => edit("region", e.target.value)}
-                required
-                minLength={2}
-                maxLength={100}
-              />
-            </label>
-          </div>
-          <label>
-            Tópicos de la marca (separados por comas)
-            <input
-              value={value.topics.join(",")}
-              onChange={(e) => edit("topics", e.target.value.split(","))}
-              required
-            />
-          </label>
-          <h3>User personas</h3>
-          {value.personas.map((p, i) => (
-            <div className="persona-edit" key={i}>
+            <div className="form-grid">
               <label>
-                Rol / segmento
+                Audiencia
                 <input
-                  value={p.role}
-                  onChange={(e) =>
-                    edit(
-                      "personas",
-                      value.personas.map((x, j) =>
-                        i === j ? { ...x, role: e.target.value } : x,
-                      ),
-                    )
-                  }
-                  required
-                  minLength={2}
-                  maxLength={120}
-                />
-              </label>
-              <label>
-                Necesidad
-                <textarea
-                  value={p.need}
-                  onChange={(e) =>
-                    edit(
-                      "personas",
-                      value.personas.map((x, j) =>
-                        i === j ? { ...x, need: e.target.value } : x,
-                      ),
-                    )
-                  }
+                  value={value.audience}
+                  onChange={(e) => edit("audience", e.target.value)}
                   required
                   minLength={5}
-                  maxLength={500}
+                  maxLength={1000}
                 />
               </label>
-              {value.personas.length > 1 && (
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() =>
-                    edit(
-                      "personas",
-                      value.personas.filter((_, j) => j !== i),
-                    )
-                  }
-                >
-                  Quitar segmento
-                </button>
-              )}
+              <label>
+                Región
+                <input
+                  value={value.region}
+                  onChange={(e) => edit("region", e.target.value)}
+                  required
+                  minLength={2}
+                  maxLength={100}
+                />
+              </label>
             </div>
-          ))}
-          <div className="form-actions">
-            <button
-              type="button"
-              className="button"
-              disabled={value.personas.length >= 6}
-              onClick={() =>
-                edit("personas", [...value.personas, { role: "", need: "" }])
-              }
-            >
-              <Plus size={16} /> Añadir persona
-            </button>
-            <button className="button dark" disabled={busy}>
-              <Check size={17} /> Guardar y confirmar
-            </button>
-          </div>
-        </form>
-      </div>
-      <aside className="panel context-panel">
-        <Fingerprint size={34} />
-        <h3>Tu filtro de relevancia</h3>
-        <p>
-          Los tópicos de esta identidad alimentan el score de afinidad. Las
-          recomendaciones incorporan tu audiencia y región.
-        </p>
-        <div className="tags">
-          {value.topics.filter(Boolean).map((t, i) => (
-            <span key={i}>{t}</span>
-          ))}
+            <label>
+              Tópicos de la marca (separados por comas)
+              <input
+                value={value.topics.join(",")}
+                onChange={(e) => edit("topics", e.target.value.split(","))}
+                required
+              />
+            </label>
+            <h3>User personas</h3>
+            {value.personas.map((p, i) => (
+              <div className="persona-edit" key={i}>
+                <label>
+                  Rol / segmento
+                  <input
+                    value={p.role}
+                    onChange={(e) =>
+                      edit(
+                        "personas",
+                        value.personas.map((x, j) =>
+                          i === j ? { ...x, role: e.target.value } : x,
+                        ),
+                      )
+                    }
+                    required
+                    minLength={2}
+                    maxLength={120}
+                  />
+                </label>
+                <label>
+                  Necesidad
+                  <textarea
+                    value={p.need}
+                    onChange={(e) =>
+                      edit(
+                        "personas",
+                        value.personas.map((x, j) =>
+                          i === j ? { ...x, need: e.target.value } : x,
+                        ),
+                      )
+                    }
+                    required
+                    minLength={5}
+                    maxLength={500}
+                  />
+                </label>
+                {value.personas.length > 1 && (
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() =>
+                      edit(
+                        "personas",
+                        value.personas.filter((_, j) => j !== i),
+                      )
+                    }
+                  >
+                    Quitar segmento
+                  </button>
+                )}
+              </div>
+            ))}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="button"
+                disabled={value.personas.length >= 6}
+                onClick={() =>
+                  edit("personas", [...value.personas, { role: "", need: "" }])
+                }
+              >
+                <Plus size={16} /> Añadir persona
+              </button>
+              <button className="button dark" disabled={busy}>
+                <Check size={17} /> Guardar y confirmar
+              </button>
+            </div>
+          </form>
         </div>
-        <h3>Referencias de la marca</h3>
-        {brand.brief.profiles.length ? (
-          brand.brief.profiles.map((p) => (
-            <div key={p.url}>
-              <a href={p.url} target="_blank" rel="noopener noreferrer">
-                {platforms[p.platform]} <ArrowUpRight size={13} />
-              </a>
-              <p>{p.description || "Sin descripción aportada."}</p>
-            </div>
-          ))
-        ) : (
-          <p>Sin perfiles. Puedes trabajar directamente con el brief.</p>
-        )}
-        <small>
-          La procedencia del borrador es el brief. Revisar estos textos no
-          prueba que se haya leído una red social.
-        </small>
-      </aside>
-    </section>
+        <aside className="panel context-panel">
+          <Fingerprint size={34} />
+          <h3>Tu filtro de relevancia</h3>
+          <p>
+            Los tópicos de esta identidad alimentan el score de afinidad. Las
+            recomendaciones incorporan tu audiencia y región.
+          </p>
+          <div className="tags">
+            {value.topics.filter(Boolean).map((t, i) => (
+              <span key={i}>{t}</span>
+            ))}
+          </div>
+          <h3>Referencias de la marca</h3>
+          {brand.brief.profiles.length ? (
+            brand.brief.profiles.map((p) => (
+              <div key={p.url}>
+                <a href={p.url} target="_blank" rel="noopener noreferrer">
+                  {platforms[p.platform]} <ArrowUpRight size={13} />
+                </a>
+                <p>{p.description || "Sin descripción aportada."}</p>
+              </div>
+            ))
+          ) : (
+            <p>Sin perfiles. Puedes trabajar directamente con el brief.</p>
+          )}
+          <small>
+            Método de identidad: {brand.identity.method}. El análisis de
+            perfiles muestra qué fuentes se consultaron y qué datos están
+            disponibles. Una identidad confirmada se conserva hasta que apliques
+            otra propuesta.
+          </small>
+        </aside>
+      </section>
+    </>
   );
 }
 

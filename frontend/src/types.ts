@@ -15,6 +15,56 @@ export type Brand = {
     profiles: { platform: string; url: string; description: string }[];
   };
   identity: Identity;
+  profile_analysis?: ProfileAnalysis | null;
+};
+export type SocialProfile = {
+  platform: string;
+  url: string;
+  description: string;
+};
+export type ProfileResult = {
+  platform: string;
+  url: string;
+  status: string;
+  provider: string;
+  message: string;
+  observed_at: string;
+  title: string;
+  description: string;
+  supplied_description: string;
+  metrics: {
+    views: number | null;
+    followers: number | null;
+    posts: number | null;
+  };
+  metrics_notes: string[];
+  usable_for_identity: boolean;
+  content_sample: {
+    url: string;
+    title: string;
+    text: string;
+    format: string;
+    views: number | null;
+    published_at: string | null;
+  }[];
+};
+export type ProfileAnalysis = {
+  schema_version: string;
+  analyzed_at: string;
+  status: string;
+  stale: boolean;
+  profiles: ProfileResult[];
+  suggested_identity: Identity;
+  identity_evidence: string[];
+  opportunities: { platform: string; action: string; basis: string }[];
+  method: string;
+};
+export type Connector = {
+  platform: string;
+  configured: boolean;
+  missing: string[];
+  scope: string;
+  analysis_approved?: boolean;
 };
 export type Batch = {
   id: string;
