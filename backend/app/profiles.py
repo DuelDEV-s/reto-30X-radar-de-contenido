@@ -210,7 +210,7 @@ async def build_analysis(brief: BrandCreate, client=None, job_store=None, refres
         async def bounded(profile):
             async with semaphore:
                 try:
-                    return await asyncio.wait_for(inspect_one(profile, c, store=job_store, budget=budget, refresh_bright_data=refresh_bright_data, allow_new_jobs=allow_new_jobs), timeout=18)
+                    return await asyncio.wait_for(inspect_one(profile, c, store=job_store, budget=budget, refresh_bright_data=refresh_bright_data, allow_new_jobs=allow_new_jobs), timeout=55)
                 except TimeoutError:
                     return ProfileResult(platform=profile.platform, url=profile.url, status="error", provider="official_api", message="La consulta excedió el tiempo disponible. Reintenta más tarde.", observed_at=datetime.now(timezone.utc), supplied_description=clean_text(profile.description))
         return await asyncio.gather(*(bounded(p) for p in brief.profiles))
