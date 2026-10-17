@@ -1,4 +1,4 @@
-"""Official, bounded connectors. Never fetch a user-supplied URL or private insights."""
+"""Bright Data first, with bounded official API fallbacks for public profiles."""
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
@@ -9,28 +9,15 @@ import httpx
 
 from .schemas import BrandCreate, Identity, Persona, ProfileContent, ProfileMetric, ProfileResult
 from .services import draft_identity, tokens
+from .profile_common import ProviderError, clean_text, number
+from . import brightdata
+from .collection_jobs import MemoryJobStore
 
 TIMEOUT = httpx.Timeout(8, connect=4)
 TTL = timedelta(minutes=15)
 
 
-def clean_text(value, limit=3000):
-    text = str(value or "")[:limit]
-    text = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[correo omitido]", text)
-    return re.sub(r"(?<!\w)\+?\d[\d ()-]{7,}\d(?!\w)", "[teléfono omitido]", text)
-
-
-def number(value):
-    if value is None:
-        return None
-    try:
-        result = int(value)
-        return result if result >= 0 else None
-    except (ValueError, TypeError):
-        return None
-
-
-def connector_status():
+def official_connector_status():
     youtube = bool(os.getenv("YOUTUBE_API_KEY"))
     ig_vars = ["META_ACCESS_TOKEN", "META_IG_USER_ID", "META_GRAPH_VERSION"]
     missing = [key for key in ig_vars if not os.getenv(key)]
@@ -42,9 +29,20 @@ def connector_status():
     ]
 
 
-class ProviderError(Exception):
-    def __init__(self, message, status="error"):
-        self.message, self.status = message, status
+def connector_status():
+    result = []
+    for fallback in official_connector_status():
+        primary = brightdata.config(fallback["platform"])
+        supported = fallback["platform"] in brightdata.DATASET_ENV
+        result.append({**fallback,
+            "configured": primary["configured"] or fallback["configured"],
+            "missing": [] if primary["configured"] or fallback["configured"] else list(dict.fromkeys(primary["missing"] + fallback["missing"])),
+            "preferred_provider": "bright_data" if supported else "not_implemented",
+            "primary": {"provider": "bright_data", **primary},
+            "fallback": {"provider": {"youtube": "youtube_data_api", "instagram": "meta_business_discovery"}.get(fallback["platform"], "not_implemented"), "configured": fallback["configured"], "missing": fallback["missing"]},
+            "scope": ("Bright Data primero; API oficial como respaldo. " if supported else "") + fallback["scope"],
+        })
+    return result
 
 
 async def get_json(client, url, params=None, headers=None):
@@ -63,7 +61,9 @@ async def get_json(client, url, params=None, headers=None):
 
 
 async def youtube(profile, client):
-    parts = [unquote(p) for p in urlsplit(profile.url).path.strip("/").split("/")]
+    brightdata.canonical_profile(profile.url, "youtube")  # Validate supported channel paths.
+    path = re.sub(r"/(about|videos|shorts|featured)/?$", "", urlsplit(profile.url).path)
+    parts = [unquote(p) for p in path.strip("/").split("/")]
     query = {}
     if len(parts) == 1 and re.fullmatch(r"@[\w.\-\u00c0-\uffff]{3,30}", parts[0]):
         query["forHandle"] = parts[0]
@@ -111,7 +111,7 @@ async def instagram(profile, client):
     handle = urlsplit(profile.url).path.strip("/")
     if not re.fullmatch(r"[A-Za-z0-9_.]{1,30}", handle) or handle in {"p", "reel", "reels", "stories", "explore", "accounts"}:
         raise ProviderError("Usa instagram.com/usuario de la marca; no una publicación o historia.", "unsupported")
-    config = next(c for c in connector_status() if c["platform"] == "instagram")
+    config = next(c for c in official_connector_status() if c["platform"] == "instagram")
     if not config["configured"]:
         raise ProviderError("Configura " + ", ".join(config["missing"]) + ". Business Discovery requiere acceso profesional autorizado; no usa sesiones de visitantes.", "requires_configuration")
     account, version = os.environ["META_IG_USER_ID"], os.environ["META_GRAPH_VERSION"]
@@ -133,7 +133,7 @@ async def instagram(profile, client):
     return {"description": clean_text(public.get("biography")), "metrics": ProfileMetric(followers=number(public.get("followers_count")), posts=number(public.get("media_count"))), "metrics_notes": ["Esta consulta pública no proporciona vistas: se muestran como no disponibles. No se consultan Insights privados ni usuarios individuales."], "content_sample": media, "usable_for_identity": True}
 
 
-async def inspect_one(profile, client):
+async def inspect_official(profile, client):
     provider = {"youtube": "youtube_data_api", "instagram": "meta_business_discovery"}.get(profile.platform, "not_implemented")
     base = {"platform": profile.platform, "url": profile.url, "provider": provider, "observed_at": datetime.now(timezone.utc), "supplied_description": clean_text(profile.description)}
     try:
@@ -149,6 +149,27 @@ async def inspect_one(profile, client):
     except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError, IndexError):
         # Never persist exception text or upstream responses: they may contain credentials.
         return ProfileResult(**base, status="error", message="No fue posible consultar la fuente. Comprueba su disponibilidad y la configuración del servidor.")
+
+
+async def inspect_one(profile, client, store=None, budget=None, refresh_bright_data=False, allow_new_jobs=True):
+    if profile.platform not in brightdata.DATASET_ENV:
+        return await inspect_official(profile, client)
+    base = {"platform": profile.platform, "url": profile.url, "observed_at": datetime.now(timezone.utc), "supplied_description": clean_text(profile.description)}
+    try:
+        primary = await brightdata.collect(profile, client, store=store, budget=budget, refresh=refresh_bright_data, allow_new_jobs=allow_new_jobs)
+        primary.attempts = [{"provider": "bright_data", "status": primary.status, "message": primary.message}]
+        return primary
+    except ProviderError as exc:
+        attempt = {"provider": "bright_data", "status": exc.status, "code": exc.code, "message": exc.message}
+        collection = getattr(exc, "collection", None)
+        if exc.code in {"restricted", "invalid_profile"}:
+            return ProfileResult(**base, provider="bright_data", status=exc.status, message=exc.message, attempts=[attempt], collection=collection)
+        fallback = await inspect_official(profile, client)
+        fallback.attempts = [attempt, {"provider": fallback.provider, "status": fallback.status, "message": fallback.message}]
+        fallback.collection = collection
+        fallback.fallback_used = fallback.status == "ready"
+        fallback.message = ("Se usó el respaldo oficial. " + exc.message) if fallback.fallback_used else ("Bright Data: " + exc.message + " Respaldo: " + fallback.message)
+        return fallback
 
 
 TOPIC_SIGNALS = {
@@ -181,13 +202,15 @@ def enrich_identity(brief: BrandCreate, profiles: list[ProfileResult]):
     return Identity.model_validate(identity.model_dump()), references
 
 
-async def build_analysis(brief: BrandCreate, client=None):
+async def build_analysis(brief: BrandCreate, client=None, job_store=None, refresh_bright_data=False, allow_new_jobs=True):
+    job_store = job_store or MemoryJobStore()
+    budget = brightdata.CollectionBudget()
     async def collect(c):
         semaphore = asyncio.Semaphore(3)
         async def bounded(profile):
             async with semaphore:
                 try:
-                    return await asyncio.wait_for(inspect_one(profile, c), timeout=18)
+                    return await asyncio.wait_for(inspect_one(profile, c, store=job_store, budget=budget, refresh_bright_data=refresh_bright_data, allow_new_jobs=allow_new_jobs), timeout=18)
                 except TimeoutError:
                     return ProfileResult(platform=profile.platform, url=profile.url, status="error", provider="official_api", message="La consulta excedió el tiempo disponible. Reintenta más tarde.", observed_at=datetime.now(timezone.utc), supplied_description=clean_text(profile.description))
         return await asyncio.gather(*(bounded(p) for p in brief.profiles))
@@ -217,4 +240,4 @@ async def build_analysis(brief: BrandCreate, client=None):
         else:
             opportunities.append({"platform": p.platform, "action": "Completar la habilitación de uso analítico antes de incorporar estos datos a la identidad.", "basis": "Datos mostrados solo como información de la fuente."})
     now = datetime.now(timezone.utc)
-    return {"schema_version": "1.0", "analyzed_at": now.isoformat(), "status": "complete" if profiles and all(p.status == "ready" for p in profiles) else "partial" if any(p.status == "ready" for p in profiles) else "unavailable", "profiles": [p.model_dump(mode="json") for p in profiles], "suggested_identity": identity.model_dump(mode="json"), "identity_evidence": references, "opportunities": opportunities, "method": "Reglas léxicas sobre textos disponibles. Las métricas se muestran con su procedencia y no se convierten en scores de perfil. Audiencia y personas requieren revisión humana."}
+    return {"schema_version": "1.0", "analyzed_at": now.isoformat(), "status": "pending" if any(p.status == "pending" for p in profiles) else "complete" if profiles and all(p.status == "ready" for p in profiles) else "partial" if any(p.status == "ready" for p in profiles) else "unavailable", "profiles": [p.model_dump(mode="json") for p in profiles], "suggested_identity": identity.model_dump(mode="json"), "identity_evidence": references, "opportunities": opportunities, "method": "Reglas léxicas sobre textos disponibles. Las métricas se muestran con su procedencia y no se convierten en scores de perfil. Audiencia y personas requieren revisión humana."}

@@ -1,10 +1,12 @@
 # Análisis automático de perfiles · paso 1
 
-El flujo ahora es **nombre y redes → consulta oficial → JSON de perfil → propuesta de identidad → revisión → radar**. Se ejecuta al crear una marca con enlaces. También se pueden editar los enlaces y volver a consultar desde Identidad de marca.
+El flujo ahora es **nombre y redes → Bright Data / respaldo oficial → JSON de perfil → propuesta de identidad → revisión → radar**. Se ejecuta al crear una marca con enlaces. También se pueden editar los enlaces y volver a consultar desde Identidad de marca.
 
 No es el descubrimiento de tendencias del paso 2: aquí se entiende la propia marca. Los compañeros siguen entregando sus lotes de tendencias con el contrato existente.
 
-## Qué está implementado
+Bright Data es el proveedor principal para ambas redes: seguir [su configuración y flujo asíncrono](bright-data.md). Las configuraciones oficiales siguientes son los respaldos y se mantienen opcionales cuando el proveedor principal responde.
+
+## APIs oficiales disponibles como respaldo
 
 | Red | Conector | Información solicitada | Límites |
 | --- | --- | --- | --- |
@@ -53,7 +55,7 @@ Invoke-RestMethod http://localhost:8000/api/profile-connectors
 
 La respuesta del segundo comando indica qué conectores están configurados y qué nombres de variables faltan, sin devolver sus valores. No publicar la salida de `docker compose config` después de introducir claves: puede contener los secretos interpolados.
 
-En la interfaz, crear una marca con nombre, enlaces y confirmación de que son cuentas públicas de la organización. La descripción, audiencia y tópicos manuales son opcionales. Si faltan credenciales se guarda la marca y se muestra la configuración requerida por red. Cuando se añadan las claves, usar **Analizar perfiles**; no hace falta volver a crearla.
+En la interfaz, crear una marca con nombre, enlaces y confirmación de que son cuentas públicas de la organización. La descripción, audiencia y tópicos manuales son opcionales. Si faltan credenciales se guarda la marca y se muestra la configuración requerida por red. Cuando se añadan las claves, usar **Consultar análisis**; no hace falta volver a crearla.
 
 ## JSON e integración
 
@@ -90,9 +92,9 @@ POST /api/brands/{brand_id}/profiles/analyze
 {"force": true}
 ```
 
-También acepta `profiles`, `brand_accounts_confirmed` y `apply_to_identity`. Al reemplazar enlaces se debe confirmar que son cuentas públicas de marca. Las rutas de red se resuelven a endpoints oficiales fijos; el servidor no visita directamente las URLs aportadas.
+También acepta `profiles`, `brand_accounts_confirmed` y `apply_to_identity`. Al reemplazar enlaces se debe confirmar que son cuentas públicas de marca. Las rutas de red se resuelven a endpoints fijos de Bright Data o de las APIs oficiales; el servidor no visita directamente las URLs aportadas.
 
-Se conserva el resultado más reciente de la consulta y se reutiliza durante 15 minutos para reducir peticiones; `force: true` vuelve a consultar. Cambiar la configuración de disponibilidad invalida esa reutilización. No se crea historial de métricas del perfil en esta tabla. Si se almacenan datos de fuentes reales a largo plazo, implementar y verificar además sus reglas de retención y eliminación; esta versión todavía no incluye una purga programada.
+Se conserva el resultado más reciente de la consulta y se reutiliza durante 15 minutos para reducir peticiones; `force: true` vuelve a consultar el análisis y los respaldos, pero reutiliza un trabajo Bright Data existente. Para otro trabajo terminado usar `refresh_bright_data: true` de forma explícita; puede consumir créditos. El estado `pending` se retoma sin esperar al TTL y la UI consulta automáticamente el mismo trabajo. Cambiar la configuración de disponibilidad invalida esa reutilización. No se crea historial de métricas del perfil. Los trabajos Bright Data tienen almacenamiento persistente separado para evitar reenvíos y conservan la fecha del resultado original. Si se almacenan datos de fuentes reales a largo plazo, implementar y verificar además sus reglas de retención y eliminación; esta versión todavía no incluye una purga programada.
 
 ## Cómo mejora la identidad y las recomendaciones
 

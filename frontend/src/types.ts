@@ -29,6 +29,19 @@ export type ProfileResult = {
   provider: string;
   message: string;
   observed_at: string;
+  attempts?: {
+    provider: string;
+    status: string;
+    message: string;
+    code?: string;
+  }[];
+  fallback_used?: boolean;
+  collection?: {
+    provider: string;
+    state: string;
+    snapshot_id: string | null;
+    requested_at: string;
+  } | null;
   title: string;
   description: string;
   supplied_description: string;
@@ -65,6 +78,8 @@ export type Connector = {
   missing: string[];
   scope: string;
   analysis_approved?: boolean;
+  primary?: { provider: string; configured: boolean; missing: string[] };
+  fallback?: { provider: string; configured: boolean; missing: string[] };
 };
 export type Batch = {
   id: string;

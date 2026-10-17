@@ -136,7 +136,7 @@ def test_confirmed_identity_is_preserved_and_cache_is_used(client, monkeypatch):
     monkeypatch.setenv("YOUTUBE_API_KEY", "fixture-secret")
     monkeypatch.setenv("YOUTUBE_ANALYTICS_APPROVED", "true")
     calls = []
-    async def fake(brief):
+    async def fake(brief, **kwargs):
         calls.append(True)
         async with httpx.AsyncClient(transport=httpx.MockTransport(yt_fixture)) as c:
             return await build_analysis(brief, client=c)

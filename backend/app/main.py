@@ -15,8 +15,9 @@ from .schemas import BatchCreate, BrandCreate, Identity, Platform, ProfileAnalys
 from .services import analyze, draft_identity
 from .profiles import build_analysis, connector_status, TTL
 from datetime import datetime, timezone
+from .collection_jobs import DBJobStore
 
-app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Ingesta v1 para el equipo del paso 2. Sin scraping ni datos personales.")
+app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
 DB = Annotated[Session, Depends(get_session)]
 
@@ -33,6 +34,7 @@ def brand_output(brand, db):
     data = dict(analysis.data) if analysis else None
     if data:
         data.pop("input_fingerprint", None)
+        data.pop("auto_apply_digest", None)
         data["stale"] = datetime.now(timezone.utc) - datetime.fromisoformat(data["analyzed_at"]) > TTL
     return {"id": brand.id, "brief": brand.brief, "identity": brand.identity, "created_at": brand.created_at, "profile_analysis": data}
 
@@ -45,10 +47,19 @@ async def inspect_brand(brand, db, request):
     brief = BrandCreate.model_validate(values)
     fingerprint = hashlib.sha256(json.dumps({"brief": brief.model_dump(mode="json"), "connectors": connector_status()}, sort_keys=True).encode()).hexdigest()
     row = db.get(ProfileAnalysis, brand.id)
-    fresh = row and datetime.now(timezone.utc) - datetime.fromisoformat(row.data["analyzed_at"]) < TTL
-    if request.force or not fresh or row.data.get("input_fingerprint") != fingerprint:
-        data = await build_analysis(brief)
+    identity_digest = hashlib.sha256(json.dumps(brand.identity, sort_keys=True).encode()).hexdigest()
+    auto_apply = row and row.data.get("auto_apply_digest") == identity_digest and brand.identity.get("status") == "draft"
+    fresh = row and row.data.get("status") != "pending" and datetime.now(timezone.utc) - datetime.fromisoformat(row.data["analyzed_at"]) < TTL
+    if request.force or request.refresh_bright_data or not fresh or row.data.get("input_fingerprint") != fingerprint:
+        allow_new_jobs = not (row and row.data.get("status") == "pending" and not request.force and not request.refresh_bright_data)
+        data = await build_analysis(brief, job_store=DBJobStore(db, brand.id), refresh_bright_data=request.refresh_bright_data, allow_new_jobs=allow_new_jobs)
+        # Another request may have confirmed or edited the identity while HTTP was pending.
+        db.refresh(brand)
+        current_digest = hashlib.sha256(json.dumps(brand.identity, sort_keys=True).encode()).hexdigest()
+        auto_apply = bool(auto_apply and current_digest == identity_digest and brand.identity.get("status") == "draft")
         data["input_fingerprint"] = fingerprint
+        if (request.apply_to_identity or auto_apply) and data["status"] == "pending":
+            data["auto_apply_digest"] = hashlib.sha256(json.dumps(data["suggested_identity"], sort_keys=True).encode()).hexdigest()
         if row:
             row.data = data
             row.analyzed_at = datetime.now(timezone.utc)
@@ -56,7 +67,7 @@ async def inspect_brand(brand, db, request):
             row = ProfileAnalysis(brand_id=brand.id, data=data)
             db.add(row)
     brand.brief = brief.model_dump(mode="json")
-    if request.apply_to_identity:
+    if request.apply_to_identity or auto_apply:
         brand.identity = row.data["suggested_identity"]
     db.commit()
     return brand_output(brand, db)
