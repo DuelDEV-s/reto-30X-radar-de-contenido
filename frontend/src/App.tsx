@@ -344,6 +344,23 @@ export default function App() {
       );
     });
   }
+  async function interpretProfiles(apply: boolean) {
+    await run(async () => {
+      const data = await api<Brand>(`/brands/${brand!.id}/profiles/interpret`, {
+        method: "POST",
+        body: JSON.stringify({ apply_to_identity: apply }),
+      });
+      setBrand(data);
+      setBrands((items) =>
+        items.map((item) => (item.id === data.id ? data : item)),
+      );
+      setNotice(
+        apply
+          ? "Propuesta aplicada como borrador. Revísala antes de confirmar."
+          : "Interpretación actualizada con los datos guardados. Revisa la propuesta; tu identidad se conserva.",
+      );
+    });
+  }
   async function importBatch(raw: string) {
     await run(async () => {
       const data = await api<{ id: string }>(
@@ -580,6 +597,7 @@ export default function App() {
               brand={brand}
               onSave={saveIdentity}
               onAnalyze={analyzeProfiles}
+              onInterpret={interpretProfiles}
               busy={busy}
             />
           ) : tab === "integration" ? (
@@ -1147,10 +1165,12 @@ function IdentityEditor({
   brand,
   onSave,
   onAnalyze,
+  onInterpret,
   busy,
 }: {
   brand: Brand;
   onSave: (value: Identity) => void;
+  onInterpret: (apply: boolean) => void;
   onAnalyze: (
     profiles: SocialProfile[],
     apply: boolean,
@@ -1169,6 +1189,7 @@ function IdentityEditor({
         brand={brand}
         busy={busy}
         onAnalyze={onAnalyze}
+        onInterpret={onInterpret}
       />
       <section className="identity-layout">
         <div className="panel">

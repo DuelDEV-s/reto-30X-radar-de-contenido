@@ -105,6 +105,47 @@ class ProfileAnalysisRequest(StrictModel):
     refresh_bright_data: bool = False
 
 
+class InterpretationRequest(StrictModel):
+    apply_to_identity: bool = False
+
+
+class InterpretationEvidence(StrictModel):
+    source_url: str | None = None
+    source_kind: Literal["brief", "profile", "post", "manual"]
+    excerpt: str = Field(max_length=240)
+
+
+class InterpretationFact(StrictModel):
+    label: str
+    value: str
+    evidence: list[InterpretationEvidence]
+
+
+class ContentPillar(StrictModel):
+    topic: str
+    rationale: str
+    idea: str
+    measurement: str
+    evidence: list[InterpretationEvidence]
+
+
+class AudienceHypothesis(StrictModel):
+    role: str
+    need: str
+    evidence: list[InterpretationEvidence]
+
+
+class ProfileInterpretation(StrictModel):
+    version: str
+    method: Literal["evidence_rules"] = "evidence_rules"
+    local_focus: str | None = None
+    facts: list[InterpretationFact]
+    pillars: list[ContentPillar]
+    audience_hypotheses: list[AudienceHypothesis]
+    coverage: dict[str, int]
+    limitations: list[str]
+
+
 class ProfileMetric(StrictModel):
     views: int | None = Field(default=None, ge=0)
     followers: int | None = Field(default=None, ge=0)

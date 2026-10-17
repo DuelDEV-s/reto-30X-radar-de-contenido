@@ -11,11 +11,12 @@ from sqlalchemy.orm import Session
 
 from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
-from .schemas import BatchCreate, BrandCreate, Identity, Platform, ProfileAnalysisRequest
+from .schemas import BatchCreate, BrandCreate, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
 from .services import analyze, draft_identity
 from .profiles import build_analysis, connector_status, TTL
 from datetime import datetime, timezone
 from .collection_jobs import DBJobStore
+from .interpretation import interpret, VERSION as INTERPRETATION_VERSION
 
 app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
@@ -45,7 +46,7 @@ async def inspect_brand(brand, db, request):
         values["profiles"] = [p.model_dump(mode="json") for p in request.profiles]
         values["brand_accounts_confirmed"] = request.brand_accounts_confirmed
     brief = BrandCreate.model_validate(values)
-    fingerprint = hashlib.sha256(json.dumps({"brief": brief.model_dump(mode="json"), "connectors": connector_status()}, sort_keys=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps({"brief": brief.model_dump(mode="json"), "connectors": connector_status(), "interpretation_version": INTERPRETATION_VERSION}, sort_keys=True).encode()).hexdigest()
     row = db.get(ProfileAnalysis, brand.id)
     identity_digest = hashlib.sha256(json.dumps(brand.identity, sort_keys=True).encode()).hexdigest()
     auto_apply = row and row.data.get("auto_apply_digest") == identity_digest and brand.identity.get("status") == "draft"
@@ -144,6 +145,24 @@ async def analyze_profiles(brand_id: str, request: ProfileAnalysisRequest, db: D
         return await inspect_brand(brand, db, request)
     except ValueError:
         raise HTTPException(422, "Revisa los perfiles y confirma que son cuentas públicas de la marca.")
+
+
+@app.post("/api/brands/{brand_id}/profiles/interpret", tags=["step-1"])
+def reinterpret_profiles(brand_id: str, request: InterpretationRequest, db: DB):
+    """Pure local reinterpretation of stored observations; never calls a provider."""
+    brand = get_brand(brand_id, db)
+    row = db.get(ProfileAnalysis, brand_id)
+    if not row:
+        raise HTTPException(409, "Primero guarda un análisis de perfiles para poder reinterpretarlo.")
+    brief = BrandCreate.model_validate(brand.brief)
+    profiles = [ProfileResult.model_validate(p) for p in row.data.get("profiles", [])]
+    data = {**row.data, **interpret(brief, profiles)}
+    data.pop("auto_apply_digest", None)
+    row.data = data
+    if request.apply_to_identity:
+        brand.identity = data["suggested_identity"]
+    db.commit()
+    return brand_output(brand, db)
 
 
 @app.post("/api/brands/{brand_id}/trend-batches", status_code=201, tags=["step-2-contract"])

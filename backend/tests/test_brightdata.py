@@ -140,8 +140,64 @@ def test_ambiguous_timeout_is_not_automatically_resubmitted(configured):
     for _ in range(3):
         p = analyze(brief(), handler, store)["profiles"][0]
         assert p["collection"]["state"] == "unknown"
+        assert p["collection"]["error_code"] == "trigger_timeout"
+        assert p["attempts"][0]["code"] == "trigger_timeout"
         assert "fixture-bright-secret" not in json.dumps(p)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status,code,state", [
+    (400, "http_400", "failed"), (422, "http_422", "failed"),
+    (404, "dataset_not_found", "failed"), (502, "http_502", "unknown"),
+    (408, "http_408", "unknown"),
+])
+def test_trigger_http_diagnostics_are_persisted_and_sanitized(configured, status, code, state):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": "fixture-bright-secret", "errors": [["url", "fixture-bright-secret"], ["fixture-bright-secret", "private"]]})
+    store = MemoryJobStore()
+    for _ in range(2):
+        p = analyze(brief(), handler, store)["profiles"][0]
+        assert p["collection"]["state"] == state
+        assert p["collection"]["error_code"] == code and p["attempts"][0]["code"] == code
+        assert str(status) in p["attempts"][0]["message"]
+        assert "fixture-bright-secret" not in json.dumps(p)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("payload,code", [(None, "invalid_json"), ({"message": "fixture-bright-secret"}, "missing_snapshot_id")])
+def test_success_without_snapshot_is_unknown_and_not_reposted(configured, payload, code):
+    def handler(request):
+        return httpx.Response(200, content="fixture-bright-secret") if payload is None else httpx.Response(200, json=payload)
+    store = MemoryJobStore()
+    p = analyze(brief(), handler, store)["profiles"][0]
+    assert p["collection"]["state"] == "unknown" and p["collection"]["error_code"] == code
+    assert "fixture-bright-secret" not in json.dumps(p)
+
+
+def test_connection_failure_is_distinct_from_ambiguous_response(configured):
+    def handler(request):
+        raise httpx.ConnectError("contains fixture-bright-secret", request=request)
+    p = analyze(brief(), handler, MemoryJobStore())["profiles"][0]
+    assert p["collection"]["state"] == "failed" and p["collection"]["error_code"] == "connection_failed"
+    assert "fixture-bright-secret" not in json.dumps(p)
+
+
+def test_trigger_has_longer_timeout_than_snapshot_polling(configured):
+    vendor, store = Vendor(), MemoryJobStore()
+    analyze(brief(), vendor, store)
+    assert vendor.requests[0].extensions["timeout"] == {"connect": 5, "read": 25, "write": 25, "pool": 25}
+
+
+def test_legacy_unknown_explains_missing_diagnostics_without_new_request(configured):
+    store, vendor = MemoryJobStore(), Vendor()
+    analyze(brief(), vendor, store)
+    job = next(iter(store.jobs.values()))
+    store.save(job, state="unknown", result=None, snapshot_id=None, message="Old generic error")
+    p = analyze(brief(), vendor, store)["profiles"][0]
+    assert p["attempts"][0]["code"] == "legacy_unknown"
+    assert "causa técnica" in p["attempts"][0]["message"] and vendor.posts == 1
 
 
 @pytest.mark.parametrize("rows", [

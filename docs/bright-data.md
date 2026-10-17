@@ -66,3 +66,19 @@ Las credenciales de Bright Data autentican contra su servicio; no son un login a
 Las pruebas usan HTTP simulado y respuestas sintéticas. Cubren proveedor principal, respaldos, estados pendientes/fallidos, timeout ambiguo, límites, persistencia, normalización y conservación de identidad. No se ejecutan extracciones de pago durante estas comprobaciones. Sin las claves del equipo no se ha verificado el acceso real a sus perfiles.
 
 Referencias del proveedor: [solicitudes asíncronas y parámetros](https://docs.brightdata.com/api-reference/rest-api/scraper/asynchronous-requests), [contrato publicado de Instagram Profiles](https://docs.brightdata.com/scrapers/gd_l1vikfch901nx3by4.json), [contrato publicado de YouTube Channel](https://docs.brightdata.com/scrapers/gd_lk538t2k2p1k3oos71.json).
+
+
+## Diagnosticar un inicio fallido
+
+La clave presente en `.env` no garantiza que una recolección se haya iniciado. Los nuevos intentos distinguen:
+
+- `http_400` / `http_422`: parámetros o formato rechazados; muestra únicamente nombres de campos conocidos, sin copiar el cuerpo de error.
+- `dataset_not_found`: HTTP 404, revisar ID y disponibilidad del scraper.
+- `access_denied`, `balance`, `quota`: acceso, saldo o límite del proveedor.
+- `connection_failed`: no fue posible conectar desde el contenedor (red, DNS, TLS).
+- `trigger_timeout`, `http_408`, `http_5xx`, `invalid_json` o `missing_snapshot_id`: no se pudo confirmar el inicio. Se conserva `unknown`, sin reenviar automáticamente.
+- `legacy_unknown`: intento de una versión anterior que no guardó la causa. No es posible reconstruir retrospectivamente su respuesta HTTP; revisar el panel antes de usar Nueva recolección.
+
+El código se conserva en `attempts[].code` y, en los intentos nuevos, `collection.error_code`. El POST de inicio dispone ahora de 25 segundos para responder (antes 8), con conexión limitada a 5 segundos. Las consultas de snapshots mantienen el timeout general; el límite por perfil es 55 segundos. El proxy local permite hasta 180 segundos por análisis, para no cortar los grupos de perfiles antes que la API.
+
+Consultar análisis reutiliza también los intentos fallidos guardados. Tras corregir la configuración o el conector, **Nueva recolección** crea otro intento y puede consumir créditos. No borrar el volumen PostgreSQL para resolver un fallo del proveedor.

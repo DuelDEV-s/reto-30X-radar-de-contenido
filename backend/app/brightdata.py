@@ -13,6 +13,7 @@ from .profile_common import ProviderError, clean_text, number
 from .schemas import ProfileContent, ProfileMetric, ProfileResult
 
 API = "https://api.brightdata.com/datasets/v3"
+TRIGGER_TIMEOUT = httpx.Timeout(25, connect=5)
 DATASET_ENV = {"instagram": "BRIGHT_DATA_INSTAGRAM_DATASET_ID", "youtube": "BRIGHT_DATA_YOUTUBE_DATASET_ID"}
 OUTPUT_FIELDS = {
     "instagram": "url|profile_url|account|biography|followers|posts_count|is_private|posts",
@@ -70,7 +71,8 @@ class CollectionBudget:
 
 
 def collection_info(job):
-    return {"provider": "bright_data", "state": job["state"], "snapshot_id": job["snapshot_id"], "requested_at": job["created_at"].isoformat()}
+    failure = job.get("result") or {}
+    return {"provider": "bright_data", "state": job["state"], "snapshot_id": job["snapshot_id"], "requested_at": job["created_at"].isoformat(), "error_code": failure.get("failure_code")}
 
 
 def pending_result(profile, job):
@@ -85,8 +87,29 @@ async def request(client, method, path, **kwargs):
         raise ProviderError("Bright Data requiere saldo o un plan habilitado.", code="balance")
     if response.status_code == 429:
         raise ProviderError("Bright Data alcanzó su límite de consultas o cuota.", code="quota")
-    response.raise_for_status()
-    return response.json()
+    if response.status_code in (400, 422):
+        # Expose only known schema field names; never upstream text, inputs or tokens.
+        fields = set()
+        try:
+            data = response.json()
+            errors = data.get("errors", []) if isinstance(data, dict) else []
+            for item in errors if isinstance(errors, list) else []:
+                if isinstance(item, list) and item and isinstance(item[0], str) and item[0] in {"url", "input", "dataset_id", "limit_per_input", "custom_output_fields"}:
+                    fields.add(item[0])
+        except ValueError:
+            pass
+        suffix = " Campos señalados: " + ", ".join(sorted(fields)) + "." if fields else ""
+        raise ProviderError(f"Bright Data rechazó el formato o los parámetros (HTTP {response.status_code}). Revisa el scraper, la URL y el contrato de entrada del conector." + suffix, code=f"http_{response.status_code}")
+    if response.status_code == 404:
+        raise ProviderError("Bright Data no encontró el scraper (HTTP 404). Revisa BRIGHT_DATA_INSTAGRAM_DATASET_ID o BRIGHT_DATA_YOUTUBE_DATASET_ID y su disponibilidad.", code="dataset_not_found")
+    if response.status_code >= 500 or response.status_code == 408:
+        raise StartUnconfirmed(f"Bright Data respondió HTTP {response.status_code}; no se puede confirmar si inició el trabajo. Revisa las ejecuciones antes de solicitar otra recolección.", code=f"http_{response.status_code}")
+    if not 200 <= response.status_code < 300:
+        raise ProviderError(f"Bright Data rechazó la solicitud (HTTP {response.status_code}). Revisa la configuración del proveedor.", code=f"http_{response.status_code}")
+    try:
+        return response.json()
+    except ValueError:
+        raise StartUnconfirmed("Bright Data respondió sin JSON válido. No se pudo confirmar el trabajo; revisa las ejecuciones antes de solicitar otro.", code="invalid_json")
 
 
 def public_record(records, profile):
@@ -177,17 +200,23 @@ async def collect(profile, client, store=None, budget=None, refresh=False, allow
     if claimed:
         target = canonical + "/about" if profile.platform == "youtube" else canonical
         try:
-            result = await request(client, "POST", "trigger", params={"dataset_id": dataset, "include_errors": "true", "notify": "false", "custom_output_fields": OUTPUT_FIELDS[profile.platform]}, json={"input": [{"url": target}], "limit_per_input": 1})
+            result = await request(client, "POST", "trigger", params={"dataset_id": dataset, "include_errors": "true", "notify": "false", "custom_output_fields": OUTPUT_FIELDS[profile.platform]}, json={"input": [{"url": target}], "limit_per_input": 1}, timeout=TRIGGER_TIMEOUT)
             snapshot = result.get("snapshot_id") if isinstance(result, dict) else None
             if not isinstance(snapshot, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", snapshot):
-                raise ValueError("Invalid snapshot response")
+                raise StartUnconfirmed("Bright Data respondió sin un snapshot_id válido. Revisa las ejecuciones antes de solicitar otra recolección.", code="missing_snapshot_id")
             job = store.save(job, state="pending", snapshot_id=snapshot)
             return pending_result(profile, job)
+        except StartUnconfirmed as exc:
+            job = store.save(job, state="unknown", message=exc.message, result={"failure_code": exc.code})
         except ProviderError as exc:
-            job = store.save(job, state="failed", message=exc.message)
+            job = store.save(job, state="failed", message=exc.message, result={"failure_code": exc.code})
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            job = store.save(job, state="failed", message="No se pudo establecer conexión con Bright Data. Revisa la salida a Internet, DNS y certificados del contenedor API.", result={"failure_code": "connection_failed"})
+        except httpx.TimeoutException:
+            job = store.save(job, state="unknown", message="Se agotó el tiempo de respuesta al iniciar Bright Data. El trabajo podría haberse creado; revisa las ejecuciones antes de solicitar otra recolección.", result={"failure_code": "trigger_timeout"})
         except (httpx.HTTPError, ValueError, TypeError):
             # The request may have reached the provider. Never submit it again automatically.
-            job = store.save(job, state="unknown", message="No se pudo confirmar el inicio de la extracción. Revisa el panel de Bright Data antes de iniciar otra; no se reenviará automáticamente.")
+            job = store.save(job, state="unknown", message="La conexión se interrumpió sin confirmar el inicio de la extracción. Revisa Bright Data antes de solicitar otra; no se reenviará automáticamente.", result={"failure_code": "transport_error"})
     if job["state"] == "requesting":
         if (datetime.now(timezone.utc) - job["created_at"]).total_seconds() <= 30:
             return pending_result(profile, job)
@@ -195,7 +224,10 @@ async def collect(profile, client, store=None, budget=None, refresh=False, allow
     if job["state"] == "ready":
         return ProfileResult.model_validate(job["result"])
     if job["state"] != "pending":
-        raise CollectionFailure(job["message"] or "La recolección falló.", job, code="restricted" if job["state"] == "restricted" else "collection_failed")
+        code = (job.get("result") or {}).get("failure_code", "restricted" if job["state"] == "restricted" else "collection_failed")
+        if job["state"] == "unknown" and not (job.get("result") or {}).get("failure_code"):
+            raise CollectionFailure("El intento anterior quedó sin confirmar y esta versión no dispone de su causa técnica. Consultar análisis no lo reenvía. Revisa las ejecuciones en Bright Data y, si corresponde, solicita Nueva recolección para obtener un diagnóstico actualizado.", job, code="legacy_unknown")
+        raise CollectionFailure(job["message"] or "La recolección falló.", job, code=code)
     if (datetime.now(timezone.utc) - job["created_at"]).total_seconds() > setting_int("BRIGHT_DATA_JOB_TIMEOUT_SECONDS", 600, 30, 3600):
         job = store.save(job, state="failed", message="La recolección excedió el tiempo configurado. No se inició otra extracción.")
         raise CollectionFailure(job["message"], job)
@@ -212,11 +244,15 @@ async def collect(profile, client, store=None, budget=None, refresh=False, allow
         return value
     except ProviderError as exc:
         state = "restricted" if exc.code == "restricted" else "failed"
-        job = store.save(job, state=state, message=exc.message)
+        job = store.save(job, state=state, message=exc.message, result={"failure_code": exc.code})
         raise CollectionFailure(exc.message, job, code=exc.code)
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
         job = store.save(job, state="failed", message="No fue posible consultar o descargar el trabajo de Bright Data. No se volvió a enviar la extracción.")
         raise CollectionFailure(job["message"], job)
+
+
+class StartUnconfirmed(ProviderError):
+    """HTTP/server ambiguity must never result in an automatic new POST."""
 
 
 class CollectionFailure(ProviderError):
