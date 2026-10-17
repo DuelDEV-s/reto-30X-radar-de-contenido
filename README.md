@@ -4,7 +4,7 @@ Base funcional para el Reto 30X: **Python 3.12 + FastAPI + React/TypeScript + Po
 
 Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integración real](docs/real-setup.md). Distingue la configuración ya disponible del desarrollo que todavía falta.
 
-**Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consultan los conectores oficiales configurados y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de YouTube e Instagram](docs/profile-analysis.md). Sin credenciales se muestran los requisitos, sin inventar datos.
+**Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consulta Bright Data primero y Meta/YouTube oficiales como respaldo y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de Bright Data y respaldos](docs/bright-data.md). Sin credenciales se muestran los requisitos, sin inventar datos.
 
 ## Arranque con Docker
 
@@ -45,11 +45,11 @@ La base usa la imagen oficial de PostgreSQL; los Dockerfiles propios están en `
 
 | Paso | Implementado | Punto de extensión |
 | --- | --- | --- |
-| 1 · Identidad | Nombre y perfiles, consulta oficial YouTube/Instagram configurable, JSON de análisis, propuesta por textos y reglas, revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
+| 1 · Identidad | Nombre y perfiles, Bright Data configurable con Meta/YouTube de respaldo, JSON de análisis, propuesta por textos y reglas, revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
 | 2 · Descubrimiento | Contrato v1, validación, procedencia, separación demo/público, idempotencia de lotes | Equipo del paso 2: entregar `BatchCreate` a `POST /api/brands/{id}/trend-batches` |
 | 3 · Priorización | Score explicable, aceleración por vistas/día, coincidencia de tópicos, pieza principal, historial, hipótesis y adaptación | `backend/app/services.py:analyze`: ampliar evidencia o incorporar explicaciones de un modelo |
 
-**No hay scraping ni llamadas a modelos de IA.** Los enlaces ahora se resuelven mediante APIs oficiales configuradas para obtener contexto público de la marca. El resultado declara qué fuente se consultó, qué datos faltan y qué textos pueden incorporarse a la identidad. LinkedIn y TikTok aún no tienen conector. Las explicaciones del radar siguen siendo plantillas editoriales. El paso 2 continúa encargado del descubrimiento de tendencias. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
+**Bright Data es el recolector principal de perfiles Instagram/YouTube**, con sus APIs oficiales como respaldo. No hay llamadas a modelos de IA. Los trabajos asíncronos se guardan en PostgreSQL; consultar su estado reutiliza el trabajo y una nueva extracción se solicita explícitamente. El resultado declara qué fuente se consultó, qué datos faltan y qué textos pueden incorporarse a la identidad. LinkedIn y TikTok aún no tienen conector. Las explicaciones del radar siguen siendo plantillas editoriales. El paso 2 continúa encargado del descubrimiento de tendencias. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
 
 El prototipo responde: **“¿Qué tópicos de este lote muestran mayor aceleración observable, cuánto coinciden con mi marca y qué experimento editorial puedo hacer?”** No responde con fiabilidad cuáles son los 10 temas que más crecen en toda una plataforma. No estima saturación ni atribuye causalidad a gancho/formato. La confianza describe cantidad de evidencia, no probabilidad estadística.
 
@@ -97,7 +97,7 @@ Los tests cubren el flujo API, identidad, aislamiento de lotes entre marcas, ded
 
 ```text
 backend/app/        API, modelos, validación, reglas y fixtures
-backend/migrations/ Migración inicial Alembic
+backend/migrations/ Migraciones Alembic (base, análisis, trabajos)
 backend/tests/      Pruebas de contrato y cálculo
 frontend/src/       Interfaz React, TypeScript y CSS adaptable
 docs/               Contrato del paso 2, ejemplo y arquitectura

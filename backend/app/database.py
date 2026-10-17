@@ -39,6 +39,19 @@ class ProfileAnalysis(Base):
     analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ProfileCollectionJob(Base):
+    __tablename__ = "profile_collection_jobs"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id", ondelete="CASCADE"), index=True)
+    generation: Mapped[str] = mapped_column(String(36))
+    state: Mapped[str] = mapped_column(String(20))
+    snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    message: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 def make_engine(url: str):
     return create_engine(url, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {}, pool_pre_ping=True)
 

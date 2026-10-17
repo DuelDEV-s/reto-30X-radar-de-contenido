@@ -102,6 +102,7 @@ class ProfileAnalysisRequest(StrictModel):
     brand_accounts_confirmed: bool = False
     force: bool = False
     apply_to_identity: bool = False
+    refresh_bright_data: bool = False
 
 
 class ProfileMetric(StrictModel):
@@ -122,7 +123,7 @@ class ProfileContent(StrictModel):
 class ProfileResult(StrictModel):
     platform: Platform
     url: str
-    status: Literal["ready", "requires_configuration", "unsupported", "not_found", "error"]
+    status: Literal["ready", "pending", "requires_configuration", "unsupported", "not_found", "error"]
     provider: str
     message: str
     observed_at: datetime
@@ -133,6 +134,9 @@ class ProfileResult(StrictModel):
     content_sample: list[ProfileContent] = Field(default_factory=list)
     usable_for_identity: bool = False
     supplied_description: str = ""
+    attempts: list[dict] = Field(default_factory=list)
+    fallback_used: bool = False
+    collection: dict | None = None
 
 
 class Snapshot(StrictModel):

@@ -1,6 +1,6 @@
 # Pasar de la demo a datos reales
 
-La aplicación ya arranca y guarda información en PostgreSQL. El análisis automático de perfiles de la marca tiene conectores oficiales configurables para YouTube e Instagram: seguir [su guía específica](profile-analysis.md). El descubrimiento del paso 2 y el proveedor IA/JEV siguen pendientes de integración. Las claves por sí solas no implementan estos últimos módulos.
+La aplicación ya arranca y guarda información en PostgreSQL. El análisis automático de perfiles de la marca usa Bright Data como fuente principal para YouTube e Instagram y conserva las APIs oficiales de respaldo: seguir [la guía de configuración](bright-data.md). El descubrimiento del paso 2 y el proveedor IA/JEV siguen pendientes de integración. Las claves por sí solas no implementan estos últimos módulos.
 
 ## 1. Preparar el entorno del equipo
 
@@ -26,7 +26,7 @@ La contraseña de ejemplo es para desarrollo local. Establecer la propia antes d
 
 En **Nueva marca**, introducir nombre, propuesta, audiencia, región y tópicos. Añadir referencias públicas de la organización y sus descripciones, revisando que no incluyan datos personales.
 
-Con nombre y enlaces se puede iniciar una marca; los demás textos son opcionales. Las APIs oficiales configuradas producen un JSON del perfil y un borrador con contexto textual. Si faltan claves se muestra el requisito. En **Identidad de marca**, revisar definición, tópicos y personas y confirmar. El trabajo manual sigue disponible sin API key.
+Con nombre y enlaces se puede iniciar una marca; los demás textos son opcionales. Bright Data o el respaldo oficial configurado producen un JSON del perfil y un borrador con contexto textual. Si faltan claves se muestra el requisito. En **Identidad de marca**, revisar definición, tópicos y personas y confirmar. El trabajo manual sigue disponible sin API key.
 
 ## 3. Conectar la fuente de los compañeros — paso 2
 
@@ -80,7 +80,7 @@ Desarrollo pendiente en `backend/app/services.py`:
 - **`analyze`:** conservar los cálculos numéricos en Python. Pedir al modelo hipótesis editoriales y adaptaciones basadas en la evidencia disponible, con referencias a las piezas y sin atribuir causalidad.
 - Validar la salida, limitar tokens/costo, añadir timeout y manejar errores. Si se usan reglas como alternativa, identificarlas en el resultado y actualizar los textos de la interfaz que hoy dicen que no hay IA.
 
-Variables **propuestas, aún no implementadas para un LLM**: `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`. Necesitan lectura en el backend y paso explícito al servicio Compose. Las variables de perfil `YOUTUBE_API_KEY`, `YOUTUBE_ANALYTICS_APPROVED`, `META_ACCESS_TOKEN`, `META_IG_USER_ID` y `META_GRAPH_VERSION` ya se leen y se pasan al backend. El recolector del paso 2 puede tener sus propias credenciales. Nunca incluir claves en `VITE_*`, Git, payloads de procedencia o logs.
+Variables **propuestas, aún no implementadas para un LLM**: `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`. Necesitan lectura en el backend y paso explícito al servicio Compose. Las variables `BRIGHT_DATA_API_KEY`, `BRIGHT_DATA_INSTAGRAM_DATASET_ID`, `BRIGHT_DATA_YOUTUBE_DATASET_ID` y las de respaldo `YOUTUBE_API_KEY`, `YOUTUBE_ANALYTICS_APPROVED`, `META_ACCESS_TOKEN`, `META_IG_USER_ID` y `META_GRAPH_VERSION` ya se leen y se pasan al backend. El recolector del paso 2 puede tener sus propias credenciales. Nunca incluir claves en `VITE_*`, Git, payloads de procedencia o logs.
 
 ## 6. Verificar el circuito completo
 

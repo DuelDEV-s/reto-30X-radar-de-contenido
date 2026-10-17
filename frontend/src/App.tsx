@@ -227,6 +227,47 @@ export default function App() {
     return () => controller.abort();
   }, [brand?.id, batchId, batchBrandId, platform, days, brand?.identity]);
 
+  useEffect(() => {
+    if (!brand || brand.profile_analysis?.status !== "pending" || busy) return;
+    const id = brand.id;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const data = await api<Brand>(`/brands/${id}/profiles/analyze`, {
+          method: "POST",
+          body: "{}",
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        setBrand((current) => (current?.id === id ? data : current));
+        setBrands((items) =>
+          items.map((item) => (item.id === id ? data : item)),
+        );
+        if (data.profile_analysis?.status === "pending")
+          timer = setTimeout(poll, 4000);
+        else
+          setNotice(
+            "Recolección terminada. Revisa las fuentes y la propuesta de identidad.",
+          );
+      } catch (e) {
+        if (!controller.signal.aborted) {
+          setError(
+            e instanceof Error
+              ? e.message
+              : "No se pudo consultar la recolección.",
+          );
+          timer = setTimeout(poll, 15000);
+        }
+      }
+    };
+    timer = setTimeout(poll, 4000);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [brand?.id, brand?.profile_analysis?.status, busy]);
+
   async function run(action: () => Promise<void>) {
     setBusy(true);
     setError("");
@@ -279,6 +320,7 @@ export default function App() {
     profiles: SocialProfile[],
     apply: boolean,
     force: boolean,
+    refreshBrightData?: boolean,
   ) {
     await run(async () => {
       const data = await api<Brand>(`/brands/${brand!.id}/profiles/analyze`, {
@@ -288,14 +330,17 @@ export default function App() {
           brand_accounts_confirmed: true,
           apply_to_identity: apply,
           force,
+          refresh_bright_data: refreshBrightData ?? false,
         }),
       });
       setBrand(data);
       setBrands((items) => items.map((b) => (b.id === data.id ? data : b)));
       setNotice(
-        apply
-          ? "Propuesta aplicada como borrador. Revísala y confirma la identidad."
-          : "Consulta terminada. Revisa los datos y el estado de cada fuente.",
+        data.profile_analysis?.status === "pending"
+          ? "Recolección iniciada. Los resultados se actualizarán automáticamente."
+          : apply
+            ? "Propuesta aplicada como borrador. Revísala y confirma la identidad."
+            : "Consulta terminada. Revisa los datos y el estado de cada fuente.",
       );
     });
   }
@@ -512,7 +557,7 @@ export default function App() {
                   </button>
                 </div>
                 <small>
-                  Demo sin claves de API · Sin scraping · Evidencia visible
+                  Demo sin claves de API · Fuentes públicas · Evidencia visible
                 </small>
               </div>
               <div className="radar-art" aria-hidden="true">
@@ -1012,7 +1057,9 @@ function CreateForm({
             />
             <small className="connector-status">
               {connector?.configured
-                ? "Conector configurado"
+                ? connector.primary?.configured
+                  ? "Bright Data principal · API oficial como respaldo"
+                  : "API oficial disponible como respaldo"
                 : connector?.missing.length
                   ? "Requiere credenciales de servidor"
                   : "Conector automático aún no disponible"}
@@ -1108,6 +1155,7 @@ function IdentityEditor({
     profiles: SocialProfile[],
     apply: boolean,
     force: boolean,
+    refreshBrightData?: boolean,
   ) => void;
   busy: boolean;
 }) {

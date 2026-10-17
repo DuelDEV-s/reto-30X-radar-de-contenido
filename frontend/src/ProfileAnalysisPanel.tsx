@@ -17,6 +17,7 @@ const names: Record<string, string> = {
 };
 const states: Record<string, string> = {
   ready: "Consultado",
+  pending: "Recolectando…",
   requires_configuration: "Falta configurar",
   unsupported: "Sin conector disponible",
   not_found: "No encontrado",
@@ -36,6 +37,7 @@ export default function ProfileAnalysisPanel({
     profiles: SocialProfile[],
     apply: boolean,
     force: boolean,
+    refreshBrightData?: boolean,
   ) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -73,7 +75,8 @@ export default function ProfileAnalysisPanel({
           <h2>De tus redes a tu identidad.</h2>
           <p>
             Descripción, contadores y contenido público disponible. Cada dato
-            conserva su origen.
+            conserva su origen. Bright Data es la fuente principal; Meta y
+            YouTube quedan como respaldo.
           </p>
         </div>
         <Radar size={32} />
@@ -96,9 +99,31 @@ export default function ProfileAnalysisPanel({
           ) : (
             <RefreshCw size={16} />
           )}{" "}
-          Analizar perfiles
+          Consultar análisis
         </button>
       </div>
+      {data?.profiles.some((p) => p.collection) && (
+        <div className="form-actions">
+          <button
+            className="button"
+            disabled={busy || data.status === "pending"}
+            onClick={() => onAnalyze(brand.brief.profiles, false, true, true)}
+          >
+            Nueva recolección
+          </button>
+          <small>
+            Inicia otro trabajo en Bright Data y puede consumir créditos.
+            Consultar análisis reutiliza el trabajo guardado.
+          </small>
+        </div>
+      )}
+      {data?.status === "pending" && (
+        <p className="alert" role="status">
+          <LoaderCircle className="spin" size={16} />
+          Recolección en curso. Los resultados se actualizan automáticamente sin
+          iniciar otra extracción.
+        </p>
+      )}
       {editing && (
         <form
           className="profile-link-form"
@@ -170,6 +195,29 @@ export default function ProfileAnalysisPanel({
                   </span>
                 </div>
                 <p className="profile-message">{p.message}</p>
+                {!!p.attempts?.length && (
+                  <details>
+                    <summary>
+                      {p.fallback_used
+                        ? "Se utilizó el respaldo oficial"
+                        : "Estado de los proveedores"}
+                    </summary>
+                    {p.attempts.map((a, i) => (
+                      <p className="muted" key={i}>
+                        {a.provider}: {states[a.status] || a.status}.{" "}
+                        {a.message}
+                      </p>
+                    ))}
+                  </details>
+                )}
+                {p.collection && (
+                  <p className="muted">
+                    Recolección: {p.collection.state}
+                    {p.collection.snapshot_id
+                      ? ` · ${p.collection.snapshot_id}`
+                      : ""}
+                  </p>
+                )}
                 {p.status === "ready" && (
                   <>
                     <h3>{p.title || "Descripción pública"}</h3>
@@ -198,7 +246,8 @@ export default function ProfileAnalysisPanel({
                     {!!p.content_sample.length && (
                       <details>
                         <summary>
-                          {p.content_sample.length} piezas públicas recientes
+                          {p.content_sample.length} piezas públicas de la
+                          muestra
                         </summary>
                         {p.content_sample.map((c) => (
                           <div className="profile-sample" key={c.url}>
@@ -224,6 +273,7 @@ export default function ProfileAnalysisPanel({
                 )}
                 <small className="profile-provider">
                   Fuente: {p.provider} ·{" "}
+                  {new Date(p.observed_at).toLocaleString("es")} ·{" "}
                   {p.usable_for_identity
                     ? "Texto disponible para enriquecer la identidad"
                     : "Sin uso automático en la identidad"}

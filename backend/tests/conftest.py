@@ -8,6 +8,14 @@ from app.database import Base, get_session
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def no_external_credentials(monkeypatch):
+    import os
+    for key in list(os.environ):
+        if key.startswith(("BRIGHT_DATA_", "YOUTUBE_", "META_")):
+            monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture
 def client():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)

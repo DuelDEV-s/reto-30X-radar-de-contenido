@@ -1,6 +1,13 @@
 # Validación local · 17 de octubre de 2026
 
-## Actualización: análisis automático de perfiles
+## Actualización: Bright Data principal
+
+- 58 pruebas de backend aprobadas: proveedores principal y de respaldo, trabajos pendientes/fallidos, respuestas privadas rechazadas, timeout ambiguo sin reenvío, límite de trabajos, persistencia entre sesiones y protección de identidad.
+- Compilación React/TypeScript y reconstrucción Docker aprobadas. PostgreSQL en revisión 003; `alembic check` sin diferencias.
+- Consulta desde la interfaz contra Docker de la marca QA existente: identifica Bright Data y cada API de respaldo como pendientes de configuración, sin inventar métricas. La marca real del usuario se conserva.
+- Las pruebas con respuestas de proveedores usan fixtures sintéticos. No se hicieron colecciones de pago ni se verificó acceso real sin las credenciales del equipo.
+
+## Verificación anterior: análisis automático de perfiles
 
 - 30 pruebas de backend aprobadas, incluidas respuestas sintéticas de YouTube e Instagram, estados sin credenciales, fallos de proveedores, contadores ausentes, reutilización de consultas y conservación de identidad confirmada.
 - Compilación de React y reconstrucción del entorno Docker aprobadas. Migración 002 aplicada en PostgreSQL; `alembic check` sin diferencias.
@@ -26,4 +33,4 @@ Comprobado en Windows con Node 24, Python 3.12 y Docker Desktop (motor Linux):
 
 El primer arranque encontró un rechazo de Windows al publicar PostgreSQL en 5432; se usa `POSTGRES_PORT=15432` por defecto, manteniendo 5432 dentro de la red Docker. El puerto es configurable.
 
-No se verificaron fuentes reales, extracción de redes, modelos de IA/JEV, permisos de una fuente externa ni rendimiento editorial: todavía no están integrados. La demo es sintética. La CI queda definida en `.github/workflows/ci.yml`; su ejecución remota requiere subir la rama y no se considera realizada por estas comprobaciones locales.
+En la verificación inicial no se probaron fuentes reales, extracción de redes, modelos de IA/JEV, permisos de una fuente externa ni rendimiento editorial. Los conectores de perfiles añadidos después están descritos arriba; IA/JEV y el descubrimiento del paso 2 siguen pendientes. La demo es sintética. La CI queda definida en `.github/workflows/ci.yml`; su ejecución remota requiere subir la rama y no se considera realizada por estas comprobaciones locales.
