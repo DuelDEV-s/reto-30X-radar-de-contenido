@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -100,6 +100,99 @@ class InstagramAccount(Base):
     # ok, private, not_found o error: también se recuerdan los fallos para no pagarlos otra vez.
     fetch_status: Mapped[str] = mapped_column(String(20))
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Última recolección de sus posts recientes; también se marca si no publicó nada en la ventana.
+    posts_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class InstagramPost(Base):
+    """Post de un creador con sus métricas más recientes. Compartido entre marcas, como la ficha del perfil."""
+    __tablename__ = "instagram_posts"
+    shortcode: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Creador en cuyo perfil apareció; `author` es quien lo publicó (difiere en colaboraciones).
+    username: Mapped[str] = mapped_column(String(30), index=True)
+    author: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    url: Mapped[str] = mapped_column(String(300))
+    content_type: Mapped[str] = mapped_column(String(20))
+    caption: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hashtags: Mapped[list] = mapped_column(JSON, default=list)
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    likes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comments: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    plays: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    followers: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_paid_partnership: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_pinned: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    coauthors: Mapped[list] = mapped_column(JSON, default=list)
+    tagged_users: Mapped[list] = mapped_column(JSON, default=list)
+    audio: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    raw: Mapped[dict] = mapped_column(JSON)
+    # Transcripción de los primeros segundos del audio (solo reels). Estado: processing, ok, no_speech,
+    # no_audio, expired, too_large, unavailable o error; None si falta o falló de forma transitoria.
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    transcript_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transcript_model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    transcribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PostTopicReview(Base):
+    """Veredicto del LLM sobre si un post habla del tópico de una búsqueda, con su tipo y subtemas.
+    Se reutiliza mientras no cambien el tópico (topic_key), el caption ni la transcripción (input_digest)."""
+    __tablename__ = "post_topic_reviews"
+    __table_args__ = (UniqueConstraint("shortcode", "topic_key", name="uq_post_topic_review"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    shortcode: Mapped[str] = mapped_column(ForeignKey("instagram_posts.shortcode", ondelete="CASCADE"), index=True)
+    topic_key: Mapped[str] = mapped_column(String(64))
+    topic: Mapped[str] = mapped_column(String(200))
+    relevance: Mapped[str] = mapped_column(String(20))
+    content_kind: Mapped[str] = mapped_column(String(30))
+    subtopics: Mapped[list] = mapped_column(JSON, default=list)
+    needs_transcript: Mapped[bool] = mapped_column(Boolean)
+    used_transcript: Mapped[bool] = mapped_column(Boolean)
+    reason: Mapped[str] = mapped_column(String(500))
+    model: Mapped[str] = mapped_column(String(100))
+    effort: Mapped[str] = mapped_column(String(20))
+    input_digest: Mapped[str] = mapped_column(String(64))
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PostContentAnalysis(Base):
+    """Rasgos de producción de los primeros segundos de un reel, según un modelo multimodal (Gemini)."""
+    __tablename__ = "post_content_analyses"
+    shortcode: Mapped[str] = mapped_column(ForeignKey("instagram_posts.shortcode", ondelete="CASCADE"), primary_key=True)
+    # processing, ok, expired, too_large, unavailable o error; None si falló de forma transitoria.
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    features: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RunTopicMap(Base):
+    """Subtemas de los posts de una búsqueda agrupados en tópicos canónicos. Se rehace si cambian los subtemas."""
+    __tablename__ = "run_topic_maps"
+    run_id: Mapped[str] = mapped_column(ForeignKey("discovery_runs.id", ondelete="CASCADE"), primary_key=True)
+    labels_digest: Mapped[str] = mapped_column(String(64))
+    topics: Mapped[list] = mapped_column(JSON)
+    model: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class InstagramPostObservation(Base):
+    """Métricas de un post en cada recolección: el historial permite medir velocidad entre observaciones."""
+    __tablename__ = "instagram_post_observations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    shortcode: Mapped[str] = mapped_column(ForeignKey("instagram_posts.shortcode", ondelete="CASCADE"), index=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    likes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comments: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    views: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    plays: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    followers: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class AccountReview(Base):
@@ -150,6 +243,13 @@ class DiscoveryRun(Base):
     profiles_requested: Mapped[list] = mapped_column(JSON, default=list)
     profiles_message: Mapped[str] = mapped_column(String(500), default="")
     profiles_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Posts recientes (Bright Data) de los creadores que pasan la revisión, para la línea base y la relevancia.
+    posts_state: Mapped[str] = mapped_column(String(30), default="not_started")
+    posts_generation: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    posts_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    posts_requested: Mapped[list] = mapped_column(JSON, default=list)
+    posts_message: Mapped[str] = mapped_column(String(500), default="")
+    posts_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DiscoveryQuery(Base):

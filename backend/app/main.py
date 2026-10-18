@@ -21,6 +21,9 @@ from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQu
 from .post_resolver import OEmbedResolver, PostResolver
 from . import related_accounts
 from . import account_review
+from . import transcription
+from . import post_review
+from . import content_patterns, topic_trends
 from .account_store import account_dict
 from .database import DiscoveryRun, InstagramAccount, RelatedAccount, RelatedAccountRun
 from .profile_common import ProviderError
@@ -90,6 +93,57 @@ def get_reviewer():
 
 
 REVIEWER = Annotated[account_review.Reviewer | None, Depends(get_reviewer)]
+
+
+def get_transcriber():
+    """Transcriptor de reels, o None si no hay OPENAI_API_KEY: los reels quedan sin transcribir."""
+    return transcription.OpenAITranscriber() if transcription.is_configured() else None
+
+
+TRANSCRIBER = Annotated[transcription.Transcriber | None, Depends(get_transcriber)]
+
+
+def get_post_reviewer():
+    """Revisor de relevancia por post, o None sin OPENAI_API_KEY: sin revisión tampoco se transcribe."""
+    return post_review.OpenAIPostReviewer() if account_review.is_configured() else None
+
+
+POST_REVIEWER = Annotated[post_review.PostReviewer | None, Depends(get_post_reviewer)]
+
+
+def get_video_analyzer():
+    """Analizador de producción de reels (Gemini), o None sin GEMINI_API_KEY."""
+    return content_patterns.GeminiAnalyzer() if content_patterns.is_configured() else None
+
+
+VIDEO_ANALYZER = Annotated[content_patterns.VideoAnalyzer | None, Depends(get_video_analyzer)]
+
+
+def get_topic_grouper():
+    return topic_trends.OpenAITopicGrouper() if account_review.is_configured() else None
+
+
+TOPIC_GROUPER = Annotated[topic_trends.OpenAITopicGrouper | None, Depends(get_topic_grouper)]
+
+
+async def enrich_run_posts(db, run, post_reviewer, transcriber, media, analyzer=None):
+    """Con los posts listos: una tanda de revisión de relevancia, otra de transcripción de reels relevantes y,
+    cuando la revisión termina, otra de análisis de video. Todo antes de que venzan los enlaces del CDN."""
+    if post_reviewer:
+        await discovery_store.review_run_posts(db, run, post_reviewer)
+    if post_reviewer and transcriber:
+        await discovery_store.transcribe_run(db, run, transcriber, media)
+    if analyzer:
+        await discovery_store.analyze_run_content(db, run, analyzer, media)
+
+
+async def get_media_client():
+    """Descarga de videos del CDN de Instagram (no lleva credenciales)."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=True, trust_env=False) as client:
+        yield client
+
+
+MEDIA = Annotated[httpx.AsyncClient, Depends(get_media_client)]
 
 
 def get_brand(brand_id, db):
@@ -396,6 +450,60 @@ def read_trend_run(run_id: str, db: DB):
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
     return trend_runs.detail(trend_runs.expire_stale(db, run))
+@app.post("/api/discovery-runs/{run_id}/posts", tags=["step-2-discovery"])
+async def start_run_posts(run_id: str, db: DB, client: BRIGHT_DATA, post_reviewer: POST_REVIEWER, transcriber: TRANSCRIBER, media: MEDIA,
+                          analyzer: VIDEO_ANALYZER):
+    """Trae los posts de los últimos 30 días (máx. 30 por creador) de los creadores que pasan la revisión.
+    Solo paga los creadores cuyos posts no se hayan recogido dentro de la vigencia."""
+    run = db.get(DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    if missing := related_accounts.missing_config():
+        raise HTTPException(503, "Bright Data requiere " + ", ".join(missing) + ".")
+    try:
+        run = await discovery_store.start_posts(db, run, client)
+    except ProviderError as error:
+        raise HTTPException(409, error.message)
+    await enrich_run_posts(db, run, post_reviewer, transcriber, media, analyzer)
+    return discovery_store.posts_detail(db, run)
+
+
+@app.get("/api/discovery-runs/{run_id}/posts", tags=["step-2-discovery"])
+async def read_run_posts(run_id: str, db: DB, client: BRIGHT_DATA, post_reviewer: POST_REVIEWER, transcriber: TRANSCRIBER, media: MEDIA,
+                         analyzer: VIDEO_ANALYZER):
+    """Línea base por creador y relevancia de cada post. Consulta la recolección en curso sin iniciar otra y,
+    con los posts listos, revisa una tanda de posts y transcribe una tanda de reels relevantes."""
+    run = db.get(DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    if run.posts_state in discovery_store.PROFILES_ACTIVE and not related_accounts.missing_config():
+        run = await discovery_store.advance_posts(db, run, client)
+    await enrich_run_posts(db, run, post_reviewer, transcriber, media, analyzer)
+    return discovery_store.posts_detail(db, run)
+
+
+def get_run(run_id, db):
+    run = db.get(DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    return run
+
+
+@app.get("/api/discovery-runs/{run_id}/trends", tags=["step-3"])
+async def run_trends(run_id: str, db: DB, grouper: TOPIC_GROUPER):
+    """Tópicos de los posts sobre el tópico de la búsqueda: estado (en caliente, emergente, saturado…), tracción,
+    amplitud, momentum y matriz por semana. Unifica los subtemas con el LLM cuando cambian."""
+    return await discovery_store.trends_detail(db, get_run(run_id, db), grouper)
+
+
+@app.get("/api/discovery-runs/{run_id}/content-patterns", tags=["step-3"])
+async def run_content_patterns(run_id: str, db: DB, media: MEDIA, analyzer: VIDEO_ANALYZER):
+    """Rasgos de producción de los primeros 30 s de los reels destacados frente a reels normales de los mismos
+    creadores. Cada consulta analiza una tanda pendiente."""
+    run = get_run(run_id, db)
+    if analyzer:
+        await discovery_store.analyze_run_content(db, run, analyzer, media)
+    return discovery_store.patterns_detail(db, run)
 
 
 @app.post("/api/demo", status_code=201, tags=["demo"])
