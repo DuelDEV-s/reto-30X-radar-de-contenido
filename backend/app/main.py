@@ -14,11 +14,14 @@ from sqlalchemy.orm import Session
 from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
 from .discovery import discover_creators, geo_targets
+from . import discovery_store
 from .query_builder import QueryContext, build_queries
 from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
 from .post_resolver import OEmbedResolver, PostResolver
 from . import related_accounts
-from .database import RelatedAccount, RelatedAccountRun
+from . import account_review
+from .account_store import account_dict
+from .database import DiscoveryRun, InstagramAccount, RelatedAccount, RelatedAccountRun
 from .profile_common import ProviderError
 from .serp import BrightDataSerpClient, SerpClient, SerpError
 from .services import analyze, draft_identity
@@ -65,6 +68,14 @@ async def get_bright_data_client():
 
 
 BRIGHT_DATA = Annotated[httpx.AsyncClient, Depends(get_bright_data_client)]
+
+
+def get_reviewer():
+    """Revisor LLM de cuentas, o None si no hay OPENAI_API_KEY: las cuentas quedan pendientes de revisión."""
+    return account_review.OpenAIReviewer() if account_review.is_configured() else None
+
+
+REVIEWER = Annotated[account_review.Reviewer | None, Depends(get_reviewer)]
 
 
 def get_brand(brand_id, db):
@@ -247,14 +258,34 @@ def discovery_queries(brand_id: str, request: DiscoveryQueryRequest, db: DB):
 def creator_search(brand_id: str, request: CreatorSearchRequest, db: DB, serp: SERP, resolver: RESOLVER):
     brand = get_brand(brand_id, db)
     plan = build_queries(QueryContext.from_identity(brand.identity, focus_topic=request.topic, max_queries=request.max_queries, profiles_only=request.profiles_only))
-    result = discover_creators(plan, serp, countries=geo_targets(brand.identity["region"], request.countries), resolver=resolver if request.resolve_posts else None)
-    if all(run.error for run in result.queries):
-        raise HTTPException(502, result.queries[0].error)
-    return {"brand_id": brand_id, "identity_status": brand.identity["status"], **result.model_dump()}
+    countries = geo_targets(brand.identity["region"], request.countries)
+    result = discover_creators(plan, serp, countries=countries, resolver=resolver if request.resolve_posts else None)
+    # Toda corrida se guarda, también las fallidas: el historial de búsquedas no se pierde.
+    run = discovery_store.save_run(db, brand, plan, result, topic=request.topic, countries=countries, max_queries=request.max_queries,
+                                   profiles_only=request.profiles_only, resolve_posts=request.resolve_posts)
+    if run.status == "failed":
+        raise HTTPException(502, f"{result.queries[0].error} (corrida {run.id})")
+    return {"run_id": run.id, "brand_id": brand_id, "identity_status": brand.identity["status"], **result.model_dump(exclude={"outcomes"})}
+
+
+@app.get("/api/brands/{brand_id}/discovery-runs", tags=["step-2-discovery"])
+def discovery_runs(brand_id: str, db: DB):
+    """Historial de búsquedas por tópico de la marca, de la más reciente a la más antigua."""
+    get_brand(brand_id, db)
+    return discovery_store.list_runs(db, brand_id)
+
+
+@app.get("/api/discovery-runs/{run_id}", tags=["step-2-discovery"])
+def discovery_run(run_id: str, db: DB):
+    """Detalle de una corrida: identidad usada, queries con sus resultados de Google y candidatos."""
+    run = db.get(DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    return discovery_store.detail(db, run)
 
 
 @app.post("/api/brands/{brand_id}/related-accounts", tags=["step-1"])
-async def start_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
+async def start_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA, reviewer: REVIEWER):
     """Inicia la búsqueda de cuentas relacionadas (reels de la marca) o devuelve la que está en curso."""
     brand = get_brand(brand_id, db)
     if missing := related_accounts.missing_config():
@@ -264,25 +295,74 @@ async def start_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
     except ProviderError as error:
         raise HTTPException(400, error.message)
     run = await related_accounts.advance(db, run, client)
+    await review_related(db, brand, run, reviewer)
     return related_accounts.output(db, brand_id, run)
+
+
+async def review_related(db, brand, run, reviewer):
+    if reviewer and run and run.state == "ready":
+        names = [r.username for r in db.scalars(select(RelatedAccount).where(RelatedAccount.brand_id == brand.id)).all()]
+        await account_review.review_accounts(db, brand, names, reviewer)
 
 
 @app.get("/api/brands/{brand_id}/related-accounts", tags=["step-1"])
-async def read_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
-    """Cuentas guardadas. Si hay una búsqueda en curso la consulta, sin iniciar extracciones nuevas."""
-    get_brand(brand_id, db)
+async def read_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA, reviewer: REVIEWER):
+    """Cuentas guardadas con su veredicto. Consulta la búsqueda en curso sin iniciar extracciones nuevas
+    y revisa con el LLM las cuentas que aún no tengan veredicto vigente."""
+    brand = get_brand(brand_id, db)
     run = db.get(RelatedAccountRun, brand_id)
     if run and run.state in related_accounts.ACTIVE and not related_accounts.missing_config():
         run = await related_accounts.advance(db, run, client)
+    await review_related(db, brand, run, reviewer)
     return related_accounts.output(db, brand_id, run)
 
 
-@app.get("/api/brands/{brand_id}/related-accounts/{username}/avatar", tags=["step-1"])
-def related_account_avatar(brand_id: str, username: str, db: DB):
-    account = db.scalar(select(RelatedAccount).where(RelatedAccount.brand_id == brand_id, RelatedAccount.username == username.lower()))
+@app.get("/api/instagram-accounts/{username}", tags=["step-1"])
+def instagram_account(username: str, db: DB):
+    """Ficha guardada de una cuenta de Instagram (compartida entre marcas y corridas)."""
+    account = db.get(InstagramAccount, username.lower())
+    if not account:
+        raise HTTPException(404, "Cuenta no guardada")
+    return account_dict(account.username, account)
+
+
+@app.get("/api/instagram-accounts/{username}/avatar", tags=["step-1"])
+def instagram_account_avatar(username: str, db: DB):
+    account = db.get(InstagramAccount, username.lower())
     if not account or not account.avatar:
         raise HTTPException(404, "Sin foto guardada")
     return Response(account.avatar, media_type=account.avatar_type or "image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.post("/api/discovery-runs/{run_id}/profiles", tags=["step-2-discovery"])
+async def start_run_profiles(run_id: str, db: DB, client: BRIGHT_DATA, reviewer: REVIEWER):
+    """Trae la ficha de perfil de los candidatos de la corrida. Solo paga los que no estén guardados y vigentes."""
+    run = db.get(DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    if missing := related_accounts.missing_config():
+        raise HTTPException(503, "Bright Data requiere " + ", ".join(missing) + ".")
+    run = await discovery_store.start_profiles(db, run, client)
+    await review_run(db, run, reviewer)
+    return discovery_store.detail(db, run)
+
+
+async def review_run(db, run, reviewer):
+    if reviewer and run.profiles_state == "ready":
+        # Por tandas: la vista consulta cada pocos segundos y la revisión avanza sin bloquear la respuesta.
+        await account_review.review_accounts(db, db.get(Brand, run.brand_id), discovery_store.candidate_usernames(db, run), reviewer, limit=6)
+
+
+@app.get("/api/discovery-runs/{run_id}/profiles", tags=["step-2-discovery"])
+async def read_run_profiles(run_id: str, db: DB, client: BRIGHT_DATA, reviewer: REVIEWER):
+    """Consulta el enriquecimiento en curso sin iniciar extracciones nuevas."""
+    run = db.get(DiscoveryRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    if run.profiles_state in discovery_store.PROFILES_ACTIVE and not related_accounts.missing_config():
+        run = await discovery_store.advance_profiles(db, run, client)
+    await review_run(db, run, reviewer)
+    return discovery_store.detail(db, run)
 
 
 @app.post("/api/demo", status_code=201, tags=["demo"])

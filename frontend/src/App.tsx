@@ -33,6 +33,7 @@ import type {
 } from "./types";
 import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
 import RelatedAccountsPanel from "./RelatedAccountsPanel";
+import DiscoveryPanel from "./DiscoveryPanel";
 
 const compact = (n: number) =>
   new Intl.NumberFormat("es", {
@@ -394,6 +395,12 @@ export default function App() {
       step: "01",
     },
     {
+      id: "discovery",
+      label: "Descubrimiento",
+      icon: Search,
+      step: "02",
+    },
+    {
       id: "integration",
       label: "Fuentes e integración",
       icon: Plug,
@@ -506,14 +513,18 @@ export default function App() {
                   ? "Encuentra tu próxima gran idea."
                   : tab === "identity"
                     ? "Primero, entiende tu marca."
-                    : "Conecta las señales."}
+                    : tab === "discovery"
+                      ? "Encuentra quién habla de tu tema."
+                      : "Conecta las señales."}
               </h1>
               <p>
                 {tab === "radar"
                   ? "Menos ruido. Más contexto para crear contenido que conecte."
                   : tab === "identity"
                     ? "Una identidad clara convierte tendencias en oportunidades relevantes."
-                    : "El punto de encuentro con el equipo que descubre contenido público."}
+                    : tab === "discovery"
+                      ? "Cada paso de la búsqueda, de la query al veredicto, a la vista."
+                      : "El punto de encuentro con el equipo que descubre contenido público."}
               </p>
             </div>
             <button className="button dark" onClick={() => setShowCreate(true)}>
@@ -601,6 +612,8 @@ export default function App() {
               onInterpret={interpretProfiles}
               busy={busy}
             />
+          ) : tab === "discovery" ? (
+            <DiscoveryPanel brand={brand} />
           ) : tab === "integration" ? (
             <Integration
               brand={brand}

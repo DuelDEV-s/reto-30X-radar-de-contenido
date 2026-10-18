@@ -68,12 +68,22 @@ class RelatedAccountRun(Base):
 
 
 class RelatedAccount(Base):
-    """Cuenta de Instagram relacionada con una marca (colaboración, coautoría o etiqueta en sus reels)."""
+    """Relación de una cuenta de Instagram con una marca (colaboración, coautoría o etiqueta en sus reels).
+    La ficha del perfil vive en `instagram_accounts`, compartida entre marcas."""
     __tablename__ = "related_accounts"
     __table_args__ = (UniqueConstraint("brand_id", "username", name="uq_brand_related_account"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id", ondelete="CASCADE"), index=True)
     username: Mapped[str] = mapped_column(String(30))
+    relations: Mapped[list] = mapped_column(JSON, default=list)
+    reel_urls: Mapped[list] = mapped_column(JSON, default=list)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class InstagramAccount(Base):
+    """Ficha pública de un perfil de Instagram obtenida con Bright Data; se reutiliza mientras esté vigente."""
+    __tablename__ = "instagram_accounts"
+    username: Mapped[str] = mapped_column(String(30), primary_key=True)
     full_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     biography: Mapped[str | None] = mapped_column(Text, nullable=True)
     followers: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -83,13 +93,102 @@ class RelatedAccount(Base):
     is_private: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     category: Mapped[str | None] = mapped_column(String(200), nullable=True)
     external_urls: Mapped[list] = mapped_column(JSON, default=list)
-    relations: Mapped[list] = mapped_column(JSON, default=list)
-    reel_urls: Mapped[list] = mapped_column(JSON, default=list)
     # Las URLs de imagen de Instagram caducan en días; se guarda una copia de la foto.
     avatar: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     avatar_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # ok, private, not_found o error: también se recuerdan los fallos para no pagarlos otra vez.
+    fetch_status: Mapped[str] = mapped_column(String(20))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AccountReview(Base):
+    """Veredicto del LLM sobre la relación de una cuenta con lo que hace la marca.
+    Se reutiliza mientras no cambien la identidad de la marca ni la ficha del perfil (digests)."""
+    __tablename__ = "account_reviews"
+    __table_args__ = (UniqueConstraint("brand_id", "username", name="uq_brand_account_review"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id", ondelete="CASCADE"), index=True)
+    username: Mapped[str] = mapped_column(String(30))
+    relevance: Mapped[str] = mapped_column(String(20))
+    account_type: Mapped[str] = mapped_column(String(30))
+    # Cuenta de la propia marca, su equipo o su ecosistema: nunca se incluye para tendencias.
+    is_internal: Mapped[bool] = mapped_column(Boolean)
+    reason: Mapped[str] = mapped_column(String(500))
+    model: Mapped[str] = mapped_column(String(100))
+    effort: Mapped[str] = mapped_column(String(20))
+    identity_digest: Mapped[str] = mapped_column(String(64))
+    profile_digest: Mapped[str] = mapped_column(String(64))
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DiscoveryRun(Base):
+    """Una corrida de búsqueda de creadores por tópico: parámetros, identidad usada y totales."""
+    __tablename__ = "discovery_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    topic: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    hl: Mapped[str] = mapped_column(String(10))
+    countries: Mapped[list] = mapped_column(JSON)
+    max_queries: Mapped[int] = mapped_column(Integer)
+    profiles_only: Mapped[bool] = mapped_column(Boolean)
+    resolve_posts: Mapped[bool] = mapped_column(Boolean)
+    # La identidad cambia con el tiempo; se conserva la que generó estas queries.
+    identity: Mapped[dict] = mapped_column(JSON)
+    query_count: Mapped[int] = mapped_column(Integer)
+    result_count: Mapped[int] = mapped_column(Integer)
+    candidate_count: Mapped[int] = mapped_column(Integer)
+    discarded_count: Mapped[int] = mapped_column(Integer)
+    unresolved_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Enriquecimiento con fichas de perfil (Bright Data) de los candidatos que faltan en instagram_accounts.
+    profiles_state: Mapped[str] = mapped_column(String(30), default="not_started")
+    profiles_generation: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    profiles_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    profiles_requested: Mapped[list] = mapped_column(JSON, default=list)
+    profiles_message: Mapped[str] = mapped_column(String(500), default="")
+    profiles_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DiscoveryQuery(Base):
+    __tablename__ = "discovery_queries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("discovery_runs.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    query: Mapped[str] = mapped_column(String(500))
+    planned_query: Mapped[str] = mapped_column(String(500))
+    angle: Mapped[str] = mapped_column(String(20))
+    topic: Mapped[str] = mapped_column(String(100))
+    gl: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    fallback_used: Mapped[bool] = mapped_column(Boolean)
+    results_count: Mapped[int] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
+class DiscoveryHit(Base):
+    """Un resultado de Google de una query y su desenlace: candidato, descartado o post sin autor."""
+    __tablename__ = "discovery_hits"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("discovery_runs.id", ondelete="CASCADE"), index=True)
+    query_id: Mapped[str] = mapped_column(ForeignKey("discovery_queries.id", ondelete="CASCADE"), index=True)
+    rank: Mapped[int] = mapped_column(Integer)
+    link: Mapped[str] = mapped_column(String(1000))
+    outcome: Mapped[str] = mapped_column(String(20))
+    username: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    author_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class DiscoveryCandidate(Base):
+    __tablename__ = "discovery_candidates"
+    __table_args__ = (UniqueConstraint("run_id", "username", name="uq_run_candidate"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    run_id: Mapped[str] = mapped_column(ForeignKey("discovery_runs.id", ondelete="CASCADE"), index=True)
+    username: Mapped[str] = mapped_column(String(30), index=True)
+    query_hits: Mapped[int] = mapped_column(Integer)
+    best_rank: Mapped[int] = mapped_column(Integer)
 
 
 def make_engine(url: str):

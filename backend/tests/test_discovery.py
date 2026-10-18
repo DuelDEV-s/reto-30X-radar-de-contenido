@@ -70,13 +70,15 @@ def test_extract_username(link, title, expected):
 def test_collect_candidates_dedupes_and_ranks():
     def ev(query, link, rank, title="", description=""):
         return SearchHit(query=query, rank=rank, link=link, title=title, description=description)
-    candidates, discarded, unresolved = collect_candidates([
+    candidates, outcomes = collect_candidates([
         ev("q1", "https://www.instagram.com/ana.ia/", 3, "Ana (@ana.ia)", "45K Followers"),
         ev("q2", "https://www.instagram.com/p/X/", 1, "Ana (@ana.ia) en Instagram", "50K Followers"),
         ev("q1", "https://www.instagram.com/tienda.ia/", 1, "Tienda oficial IA", "8K seguidores"),
         ev("q1", "https://www.instagram.com/explore/", 2),
     ])
-    assert discarded == 1 and unresolved == []
+    assert [o.outcome for o in outcomes] == ["candidate", "candidate", "candidate", "discarded"]
+    assert [o.author_source for o in outcomes[:3]] == ["url", "snippet", "url"]  # el post /p/X/ trae @ana.ia en el título
+    assert outcomes[3].reason == "ruta que no es perfil"
     ana, store = candidates
     assert (ana.username, ana.query_hits, ana.best_rank) == ("ana.ia", 2, 1)
     assert ana.sources == [Source(query="q1", link="https://www.instagram.com/ana.ia/", rank=3), Source(query="q2", link="https://www.instagram.com/p/X/", rank=1)]
@@ -153,8 +155,8 @@ def test_discarded_results_are_logged_with_reason(caplog):
     def ev(link, title=""):
         return SearchHit(query="q1", rank=1, link=link, title=title)
     with caplog.at_level("INFO", logger="app.creators"):
-        candidates, discarded, unresolved = collect_candidates([ev("https://www.instagram.com/reel/X/", "Video"), ev("https://www.instagram.com/explore/tags/ia/"), ev("https://example.com/ana")])
-    assert candidates == [] and discarded == 3 and unresolved == ["https://www.instagram.com/reel/X/"]
+        candidates, outcomes = collect_candidates([ev("https://www.instagram.com/reel/X/", "Video"), ev("https://www.instagram.com/explore/tags/ia/"), ev("https://example.com/ana")])
+    assert candidates == [] and [o.outcome for o in outcomes] == ["unresolved", "discarded", "discarded"]
     assert "post/reel sin @usuario" in caplog.text and "ruta que no es perfil" in caplog.text and "otro dominio" in caplog.text
     assert "https://www.instagram.com/reel/X/ | Video | query=q1" in caplog.text
     assert discard_reason("https://www.instagram.com/ana-maria/") == "usuario no válido"
@@ -164,14 +166,14 @@ def test_posts_without_user_are_resolved_with_resolver():
     def ev(link, query="q1"):
         return SearchHit(query=query, rank=2, link=link, title="Caption sin usuario")
     resolver = FakeResolver({"https://www.instagram.com/reel/AAA/": PostAuthor(username="miguebaenaia", author_id="7547", caption="3 herramientas de IA")})
-    candidates, discarded, unresolved = collect_candidates([
+    candidates, outcomes = collect_candidates([
         ev("https://www.instagram.com/reel/AAA/"), ev("https://www.instagram.com/p/BBB/"),
         ev("https://www.instagram.com/miguebaenaia/reel/CCC/", "q2"), ev("https://www.instagram.com/explore/"),
     ], resolver)
     assert resolver.calls == ["https://www.instagram.com/reel/AAA/", "https://www.instagram.com/p/BBB/"]  # explore y URLs con usuario no se consultan
     assert [c.username for c in candidates] == ["miguebaenaia"] and candidates[0].query_hits == 2
     assert [src.link for src in candidates[0].sources] == ["https://www.instagram.com/reel/AAA/", "https://www.instagram.com/miguebaenaia/reel/CCC/"]
-    assert discarded == 2 and unresolved == ["https://www.instagram.com/p/BBB/"]
+    assert [(o.outcome, o.author_source) for o in outcomes] == [("candidate", "oembed"), ("unresolved", None), ("candidate", "url"), ("discarded", None)]
 
 
 def test_oembed_resolver_parses_caches_and_stops_on_429():
@@ -233,3 +235,102 @@ def test_brightdata_client_retries_non_json_once():
     with pytest.raises(SerpError, match="JSON"):
         always_bad.search("q")
     assert len(calls) == 3
+
+
+def test_every_creator_search_run_is_persisted(client):
+    brand_id = client.post("/api/demo").json()["brand"]["id"]
+    serp = FakeSerp()
+    app.dependency_overrides[get_serp_client] = lambda: serp
+    app.dependency_overrides[get_post_resolver] = lambda: FakeResolver({"https://www.instagram.com/reel/R1/": PostAuthor(username="luis")})
+    queries = [q["query"] for q in client.post(f"/api/brands/{brand_id}/discovery-queries", json={"max_queries": 2}).json()["queries"]]
+    serp.pages[queries[0]] = [result("https://www.instagram.com/ana.ia/", "Ana", rank=1), result("https://www.instagram.com/reel/R1/", "Video", rank=2),
+                              result("https://www.instagram.com/reel/R2/", "Otro", rank=3), result("https://blog.example.com/x", rank=4)]
+    serp.pages[queries[1]] = [result("https://www.instagram.com/ana.ia/", "Ana", rank=5)]
+    body = client.post(f"/api/brands/{brand_id}/creator-search", json={"max_queries": 2, "topic": None}).json()
+    assert "outcomes" not in body
+
+    runs = client.get(f"/api/brands/{brand_id}/discovery-runs").json()
+    assert [r["id"] for r in runs] == [body["run_id"]]
+    assert runs[0]["status"] == "completed" and runs[0]["countries"] == ["co"]
+    assert runs[0]["totals"] == {"queries": 2, "results": 5, "candidates": 2, "discarded": 1, "unresolved": 1}
+
+    run = client.get(f"/api/discovery-runs/{body['run_id']}").json()
+    assert run["identity"]["topics"] == client.get(f"/api/brands/{brand_id}").json()["identity"]["topics"]
+    first = run["queries"][0]
+    assert first["query"] == queries[0] and first["gl"] == "co" and first["results"] == 4
+    assert [(h["rank"], h["outcome"], h["username"], h["author_source"]) for h in first["hits"]] == [
+        (1, "candidate", "ana.ia", "url"), (2, "candidate", "luis", "oembed"), (3, "unresolved", None, None), (4, "discarded", None, None)]
+    ana = run["candidates"][0]
+    assert (ana["username"], ana["query_hits"], ana["best_rank"]) == ("ana.ia", 2, 1)
+    assert [s["query"] for s in ana["sources"]] == [queries[0], queries[1]]
+    assert client.get("/api/discovery-runs/missing").status_code == 404
+    assert client.get("/api/brands/missing/discovery-runs").status_code == 404
+
+
+def test_failed_run_is_persisted_too(client):
+    brand_id = client.post("/api/demo").json()["brand"]["id"]
+    app.dependency_overrides[get_serp_client] = lambda: FakeSerp(fail={"*"})
+    app.dependency_overrides[get_post_resolver] = lambda: FakeResolver({})
+    response = client.post(f"/api/brands/{brand_id}/creator-search", json={"max_queries": 1})
+    assert response.status_code == 502
+    runs = client.get(f"/api/brands/{brand_id}/discovery-runs").json()
+    assert len(runs) == 1 and runs[0]["status"] == "failed" and runs[0]["id"] in response.json()["detail"]
+    run = client.get(f"/api/discovery-runs/{runs[0]['id']}").json()
+    assert "401" in run["queries"][0]["error"] and run["queries"][0]["hits"] == []
+
+
+def test_run_candidates_are_enriched_only_with_missing_profiles(client, monkeypatch):
+    import json as jsonlib
+    from datetime import datetime, timezone
+    from app.database import InstagramAccount
+    from app.main import get_bright_data_client, get_session
+
+    brand_id = client.post("/api/demo").json()["brand"]["id"]
+    serp = FakeSerp()
+    app.dependency_overrides[get_serp_client] = lambda: serp
+    app.dependency_overrides[get_post_resolver] = lambda: FakeResolver({})
+    query = client.post(f"/api/brands/{brand_id}/discovery-queries", json={"max_queries": 1}).json()["queries"][0]["query"]
+    serp.pages[query] = [result("https://www.instagram.com/ana.ia/", rank=1), result("https://www.instagram.com/luis/", rank=2)]
+    run_id = client.post(f"/api/brands/{brand_id}/creator-search", json={"max_queries": 1}).json()["run_id"]
+
+    # @luis ya está guardado y vigente: no se paga de nuevo.
+    session = next(app.dependency_overrides[get_session]())
+    session.add(InstagramAccount(username="luis", full_name="Luis", followers=900, external_urls=[], raw={}, fetch_status="ok", fetched_at=datetime.now(timezone.utc)))
+    session.commit()
+
+    triggers, ready = [], set()
+    def bright(request):
+        if request.url.path.endswith("/trigger"):
+            triggers.append(jsonlib.loads(request.content))
+            return httpx.Response(200, json={"snapshot_id": "sd_p1"})
+        if "/progress/" in request.url.path:
+            return httpx.Response(200, json={"status": "ready" if ready else "running"})
+        return httpx.Response(200, json=[{"account": "ana.ia", "full_name": "Ana", "followers": 12000, "biography": "IA para pymes"}])
+
+    async def override():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(bright)) as http:
+            yield http
+    app.dependency_overrides[get_bright_data_client] = override
+    assert client.post(f"/api/discovery-runs/{run_id}/profiles").status_code == 503
+    monkeypatch.setenv("BRIGHT_DATA_API_KEY", "k")
+    monkeypatch.setenv("BRIGHT_DATA_INSTAGRAM_DATASET_ID", "gd_profiles")
+
+    before = {c["username"]: c["review_status"] for c in client.get(f"/api/discovery-runs/{run_id}").json()["candidates"]}
+    assert before == {"ana.ia": "not_requested", "luis": "pending"}  # luis ya tiene ficha guardada
+    started = client.post(f"/api/discovery-runs/{run_id}/profiles").json()
+    assert started["profiles"]["state"] == "pending" and started["profiles"]["requested"] == 1
+    assert {c["username"]: c["review_status"] for c in started["candidates"]}["ana.ia"] == "awaiting_profile"
+    assert started["review_enabled"] is False
+    assert triggers == [[{"url": "https://www.instagram.com/ana.ia"}]]
+    assert client.get(f"/api/discovery-runs/{run_id}/profiles").json()["profiles"]["state"] == "pending"
+    ready.add(True)
+    done = client.get(f"/api/discovery-runs/{run_id}/profiles").json()
+    assert done["profiles"]["state"] == "ready"
+    by_user = {c["username"]: c for c in done["candidates"]}
+    assert by_user["ana.ia"]["followers"] == 12000 and by_user["ana.ia"]["biography"] == "IA para pymes"
+    assert by_user["luis"]["full_name"] == "Luis"
+
+    # Repetir no cuesta nada: todos los perfiles ya están guardados.
+    again = client.post(f"/api/discovery-runs/{run_id}/profiles").json()
+    assert again["profiles"]["state"] == "ready" and "Sin costo" in again["profiles"]["message"] and len(triggers) == 1
+    assert client.get("/api/discovery-runs/missing/profiles").status_code == 404
