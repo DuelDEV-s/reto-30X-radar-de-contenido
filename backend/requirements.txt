@@ -8,3 +8,5 @@ httpx==0.28.1
 pytest==8.3.5
 openai==3.35.1
 anthropic==1.15.0
+av==18.1.0
+google-genai==2.8.0

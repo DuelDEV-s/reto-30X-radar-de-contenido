@@ -105,6 +105,10 @@ async def snapshot_records(client, snapshot: str) -> list | None:
     if status != "ready":
         raise ProviderError("Bright Data indicó un fallo o un estado no reconocido del trabajo.", code="collection_failed")
     records = await request(client, "GET", f"snapshot/{snapshot}", params={"format": "json"})
+    # Con progreso "ready", la descarga aún puede responder 202 {"status": "building"} mientras se arma el
+    # archivo. No son registros: tratarlos como tales daría el trabajo por terminado y vacío.
+    if isinstance(records, dict) and isinstance(records.get("status"), str) and not records.get("url"):
+        return None
     return records if isinstance(records, list) else [records]
 
 
