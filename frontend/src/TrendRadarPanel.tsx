@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import {
   ArrowRight,
@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { api } from "./types";
 import MediaPreview from "./MediaPreview";
+const TrendComparison = lazy(()=>import("./DiscoveryCharts").then(m=>({default:m.TrendComparison})));
 import type {
   Brand,
   TrendEngineStatus,
@@ -316,7 +317,7 @@ function Progress({ run }: { run: TrendRunDetail }) {
   );
 }
 
-function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batchId: string) => void }) {
+export function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batchId: string) => void }) {
   const report = run.report!;
   const items = useMemo(() => new Map(report.items.map((i) => [i.item_id, i])), [report]);
   const topics = useMemo(() => new Map(report.topics.map((t) => [t.topic_id, t])), [report]);
@@ -344,10 +345,11 @@ function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batc
         {mode !== "both" && <Stat label="Costo de la corrida" value={usd(cost)} note="Búsquedas y modelos" />}
       </div>
 
+      <Suspense fallback={<div className="ds-skeleton" role="status">Preparando las gráficas de la consulta…</div>}><TrendComparison topics={report.topics} mode={mode}/></Suspense>
       <section className="panel">
         <div className="trend-section-head">
           <div>
-            <h2>Qué publicar esta semana</h2>
+            <h2>Ideas para probar con tu audiencia</h2>
             <p className="muted">
               Ordenadas por oportunidad:{" "}
               {mode === "both"
@@ -383,7 +385,7 @@ function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batc
       </section>
 
       <section className="panel">
-        <h2>Tópicos del mercado</h2>
+        <h2>Temas de esta consulta</h2>
         <p className="muted">
           {mode === "both"
             ? "Brecha = demanda en YouTube menos oferta en LinkedIn (de −100 a +100). Un valor alto indica que la audiencia lo quiere y pocos lo publican."
@@ -446,7 +448,7 @@ function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batc
                   )}
                   <td>
                     <strong>{Math.round(t.opportunity_score * 100)}</strong>
-                    <small className="trend-entities">confianza {Math.round(t.confidence * 100)}%</small>
+                    <small className="trend-entities">confianza (índice): {Math.round(t.confidence * 100)} /100</small>
                   </td>
                 </tr>
               ))}
@@ -458,7 +460,7 @@ function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batc
       <div className={useYt ? "trend-columns" : "trend-columns single"}>
         <section className="panel">
           <h3>
-            <TrendingUp size={16} /> Ganchos que funcionan
+            <TrendingUp size={16} /> Ganchos observados en la muestra
           </h3>
           {report.patterns.length ? (
             report.patterns.map((p) => (

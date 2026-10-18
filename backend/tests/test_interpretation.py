@@ -6,7 +6,7 @@ import pytest
 
 from app import main
 from app.database import ProfileAnalysis, get_session
-from app.interpretation import interpret
+from app.interpretation import interpret, VERSION
 from app.schemas import BrandCreate, ProfileContent, ProfileResult
 
 
@@ -136,7 +136,7 @@ def test_saved_interpretation_never_fetches_and_preserves_confirmed_identity(cli
     data = revised.json()
     assert data["identity"]["summary"] == confirmed["summary"] and data["identity"]["status"] == "confirmed"
     assert data["profile_analysis"]["analyzed_at"] == old_time  # Reinterpreting is not a fresh observation.
-    assert data["profile_analysis"]["interpretation"]["version"] == "2.0"
+    assert data["profile_analysis"]["interpretation"]["version"] == VERSION
     assert "helados" in data["profile_analysis"]["suggested_identity"]["topics"]
     applied = client.post(path + "/profiles/interpret", json={"apply_to_identity": True}).json()
     assert applied["identity"]["status"] == "draft" and "helados" in applied["identity"]["topics"]
@@ -145,3 +145,72 @@ def test_saved_interpretation_never_fetches_and_preserves_confirmed_identity(cli
 def test_interpretation_requires_saved_observations(client):
     data = client.post("/api/brands", json=brand().model_dump(mode="json")).json()
     assert client.post(f"/api/brands/{data['id']}/profiles/interpret", json={}).status_code == 409
+
+
+def test_sparse_tiktok_bio_offers_exploratory_persona_without_invented_interests():
+    p = profile("Me apoyarías siguiéndome. Me ayudan a llegar a los 10k.")
+    p.platform = "tiktok"
+    p.url = "https://www.tiktok.com/@fixture"
+    p.metrics.followers, p.metrics.posts = 8106, 34
+    result = interpret(BrandCreate(name="Fixture", profiles=[{"platform": "tiktok", "url": p.url}], brand_accounts_confirmed=True), [p])
+    detail = result["interpretation"]
+    assert detail["audience_readiness"] == "exploratory"
+    assert len(detail["audience_hypotheses"]) == 1
+    h = detail["audience_hypotheses"][0]
+    assert h["basis"] == "exploratory" and h["goal"] and h["barriers"] and h["validation_question"]
+    assert "series" not in json.dumps(h).lower()
+    assert detail["content_snapshot"][0]["sample_size"] == 0
+    assert detail["content_snapshot"][0]["median_views"] is None
+    assert detail["missing_context"]
+
+
+@pytest.mark.parametrize("franchise", ["Gravity Falls", "Serie Ficticia QA"])
+def test_declared_entertainment_topics_create_specific_rich_personas(franchise):
+    brief = BrandCreate(name="Comunidad QA", description=f"Publicamos contenido sobre la serie {franchise}.", audience=f"Personas interesadas en series y en {franchise}.", topics=["series y animación", franchise])
+    result = interpret(brief, [profile("Me apoyarías siguiéndome.")])
+    people = result["interpretation"]["audience_hypotheses"]
+    assert any(franchise.casefold() in h["role"].casefold() for h in people)
+    assert any(h["basis"] == "declared" for h in people)
+    assert all(h["evidence"] and h["goal"] and h["barriers"] and h["content_angles"] and h["validation_question"] for h in people)
+    assert all("age" not in h and "gender" not in h and "income" not in h for h in people)
+    assert result["suggested_identity"]["personas"][0]["content_angles"]
+
+
+def test_sample_summary_deduplicates_and_preserves_unknown_and_zero():
+    p = profile("Una heladería.", ["Helados para compartir", "Preparamos helados", "Otro post"])
+    p.content_sample[0].views = 0
+    p.content_sample[1].views = 100
+    duplicate = p.model_copy(deep=True)
+    summary = interpret(brand(), [p, duplicate])["interpretation"]["content_snapshot"][0]
+    assert summary["sample_size"] == 3 and summary["with_views"] == 2
+    assert summary["median_views"] == 50
+    assert summary["top_content"][0]["views"] == 100
+    assert summary["formats"] == []
+
+
+def test_context_update_reinterprets_without_collecting_or_changing_identity(client, monkeypatch):
+    created = client.post("/api/brands", json=brand().model_dump(mode="json")).json()
+    bid = created["id"]
+    stream = main.app.dependency_overrides[get_session]()
+    db = next(stream)
+    saved = {"analyzed_at": "2026-10-01T12:00:00+00:00", "profiles": [profile("Me apoyarías siguiéndome.").model_dump(mode="json")]}
+    try:
+        db.add(ProfileAnalysis(brand_id=bid, data=saved))
+        db.commit()
+    finally:
+        stream.close()
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Saving declared context must not make provider calls")
+    monkeypatch.setattr(main, "build_analysis", forbidden)
+    identity = created["identity"] | {"status": "confirmed"}
+    client.put(f"/api/brands/{bid}/identity", json=identity)
+    context = {"description": "Contenido sobre la serie Gravity Falls. Contacto qa@example.org", "audience": "Personas interesadas en series y Gravity Falls", "topics": ["series y animación", "Gravity Falls"]}
+    response = client.put(f"/api/brands/{bid}/context", json=context)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["identity"]["status"] == "confirmed" and body["identity"]["summary"] == identity["summary"]
+    assert "qa@example.org" not in json.dumps(body)
+    assert body["profile_analysis"]["profiles"] == saved["profiles"]
+    assert body["profile_analysis"]["analyzed_at"] == saved["analyzed_at"]
+    assert body["profile_analysis"]["suggested_identity"]["personas"][0]["goal"]
+    assert client.put(f"/api/brands/{bid}/context", json=context | {"description": "corta"}).status_code == 422

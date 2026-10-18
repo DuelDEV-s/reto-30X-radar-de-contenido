@@ -13,6 +13,10 @@ Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integrac
 
 ## Arranque con Docker
 
+**Descubrimiento visual:** galería con filtros y tabla, resumen gráfico de la muestra, evolución por tema y mapa accesible. [Diseño y metodología del paso 2](docs/discovery-design.md).
+
+**Personas del paso 1:** objetivos, barreras, ideas, validación y evidencia; contexto editable sin repetir extracciones. [Uso y límites de las personas propuestas](docs/personas.md).
+
 Requiere Docker Desktop con el motor Linux activo y Docker Compose v2. Desde la raíz:
 
 ```bash

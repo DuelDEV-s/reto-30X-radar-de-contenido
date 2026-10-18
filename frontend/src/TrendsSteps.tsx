@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ArrowUpRight, LoaderCircle } from "lucide-react";
+import { ArrowUpRight, LoaderCircle, ChartScatter, Table2 } from "lucide-react";
+import MediaPreview from "./MediaPreview";
 import type { PatternTrait, RunPatterns, RunTrends, TrendState, InstagramTrendTopic } from "./types";
 
 export const trendStates: Record<TrendState, string> = {
@@ -25,20 +26,20 @@ const stateNotes: Record<TrendState, string> = {
   otros: "Subtemas sueltos que no forman un tópico.",
 };
 const ACTIONABLE = new Set<TrendState>(["en_caliente", "emergente", "en_ascenso"]);
-// Divergente alrededor de ×1 (lo normal del creador): azul por encima, rojo por debajo, gris neutro en el medio.
+// Divergente alrededor de ×1: verde por encima, tierra por debajo y gris neutro.
 const NEUTRAL = [240, 239, 236];
-const ABOVE = [24, 79, 149];
-const BELOW = [227, 73, 72];
-const ACCENT = "#2a78d6";
-const MUTED = "#c3c2b7";
+const ABOVE = [54, 98, 67];
+const BELOW = [169, 103, 79];
+const ACCENT = "#3c714b";
+const MUTED = "#b6c2b1";
 
 const ratio = (v: number | null) => (v === null ? "—" : `×${v.toFixed(v >= 10 ? 0 : 2)}`);
 const signed = (v: number | null) => (v === null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}`);
-const weekLabel = (iso: string) => new Date(iso).toLocaleDateString("es", { day: "numeric", month: "short" });
+const weekLabel = (iso: string) => new Date(iso).toLocaleDateString("es", { day: "numeric", month: "short", timeZone:"UTC" });
 
 function cellColor(performance: number | null) {
   if (performance === null) return null;
-  // log2 recortado a ±2: ×4 o más es el extremo azul, ×0,25 o menos el rojo.
+  // log2 recortado a ±2: ×4 o más es el extremo verde, ×0,25 o menos el tierra.
   const t = Math.max(-1, Math.min(1, Math.log2(performance) / 2));
   const end = t >= 0 ? ABOVE : BELOW;
   const rgb = NEUTRAL.map((c, i) => Math.round(c + (end[i] - c) * Math.abs(t)));
@@ -48,17 +49,20 @@ function cellColor(performance: number | null) {
 
 export function TrendsStep({ data }: { data: RunTrends | null }) {
   const [selected, setSelected] = useState("");
+  const [view,setView]=useState<"map"|"matrix">("map");
   if (!data) return <p className="muted"><LoaderCircle size={12} className="spin" /> Cargando tendencias…</p>;
   const topics = data.topics.filter((t) => t.state !== "otros");
-  const current = topics.find((t) => t.name === selected);
+  const current = topics.find((t) => t.name === selected) || topics[0];
   return (
     <>
-      <h3>7 · Tendencias de «{data.topic}»</h3>
+      <div className="ds-section-heading"><div><span className="eyebrow">07 · MAPA DE OPORTUNIDADES</span><h3>Qué temas ganan impulso.</h3><p>Señales dentro de la muestra de «{data.topic}».</p></div></div>
+      <details className="ds-method"><summary>Cómo leer tracción, amplitud y momentum</summary>
       <p className="muted">
         Solo cuentan los posts sobre el tópico. Los subtemas de cada post se agrupan en tópicos y cada tópico se mide por su
         tracción (cuánto hace rendir a los creadores frente a su propia normalidad, pesando más lo reciente), su amplitud
         (cuántos creadores lo publicaron en los últimos 14 días) y su momentum (los últimos 14 días frente a los 14 anteriores).
       </p>
+      </details>
       {data.state === "waiting" && (
         <p className="profile-message">
           {data.reviews_pending
@@ -71,10 +75,8 @@ export function TrendsStep({ data }: { data: RunTrends | null }) {
       {!!topics.length && (
         <>
           <TrendSummary topics={topics} />
-          <h4 className="pipeline-group">Tópicos por semana</h4>
-          <TrendMatrix data={data} topics={topics} selected={selected} onSelect={setSelected} />
-          <h4 className="pipeline-group">Mapa de tendencias</h4>
-          <TrendQuadrant topics={topics} selected={selected} onSelect={setSelected} />
+          <div className="ds-trends-toolbar"><label>Tema para explorar<select aria-label="Tema para explorar" value={current?.name||""} onChange={e=>setSelected(e.target.value)}>{topics.map(t=><option key={t.name} value={t.name}>{t.name}</option>)}</select></label><div className="ds-view-switch" role="group" aria-label="Visualización de tendencias"><button aria-pressed={view==="map"} onClick={()=>setView("map")}><ChartScatter size={15}/> Mapa</button><button aria-pressed={view==="matrix"} onClick={()=>setView("matrix")}><Table2 size={15}/> Semanas</button></div></div>
+          <div className="ds-trends-visual">{view==="matrix" ? <TrendMatrix data={data} topics={topics} selected={current?.name||""} onSelect={setSelected} /> : <TrendQuadrant topics={topics} selected={current?.name||""} onSelect={setSelected} />}</div>
           {current && <TopicDetail topic={current} />}
         </>
       )}
@@ -133,7 +135,7 @@ function TrendMatrix({ data, topics, selected, onSelect }: { data: RunTrends; to
           {topics.map((t) => (
             <tr key={t.name} className={selected === t.name ? "selected" : ""}>
               <td>
-                <button className="link-button" onClick={() => onSelect(selected === t.name ? "" : t.name)}>{t.name}</button>
+                <button className="link-button" onClick={() => onSelect(t.name)}>{t.name}</button>
               </td>
               <td><span className={`trend-state ${t.state}`} title={stateNotes[t.state]}>{trendStates[t.state]}</span></td>
               {t.cells.map((c) => {
@@ -175,8 +177,8 @@ function TrendMatrix({ data, topics, selected, onSelect }: { data: RunTrends; to
 
 function TrendQuadrant({ topics, selected, onSelect }: { topics: InstagramTrendTopic[]; selected: string; onSelect: (n: string) => void }) {
   const W = 760, H = 380, PAD = { l: 52, r: 16, t: 16, b: 44 };
-  const points = topics.filter((t) => t.traction !== null);
-  const xs = points.map((t) => t.momentum ?? 0);
+  const points = topics.filter((t) => t.traction !== null && t.traction>0 && Number.isFinite(t.traction) && t.momentum!==null && Number.isFinite(t.momentum));
+  const xs = points.map((t) => t.momentum!);
   const ys = points.map((t) => Math.log2(t.traction!));
   const xMax = Math.max(1, ...xs.map(Math.abs)) * 1.1;
   const yMax = Math.max(1, ...ys.map(Math.abs)) * 1.1;
@@ -199,11 +201,11 @@ function TrendQuadrant({ topics, selected, onSelect }: { topics: InstagramTrendT
     placed.push({ ...box, name: t.name, anchor });
   }
   const labels = new Map(placed.map((p) => [p.name, p]));
-  const xTicks: number[] = [];
-  for (let v = -Math.floor(xMax * 2) / 2; v <= xMax; v += 0.5) xTicks.push(v);
+  const xTicks = [-xMax, -xMax/2, 0, xMax/2, xMax];
   return (
-    <div className="trend-quadrant">
+    <div className="trend-quadrant" tabIndex={0}>
       <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Tracción frente a momentum por tópico">
+        <rect x={x(0)} y={PAD.t} width={W-PAD.r-x(0)} height={y(0)-PAD.t} fill="#edf5e6" rx={8}/>
         <line x1={x(0)} x2={x(0)} y1={PAD.t} y2={H - PAD.b} className="axis" />
         <line x1={PAD.l} x2={W - PAD.r} y1={y(0)} y2={y(0)} className="axis" />
         <text x={W - PAD.r - 4} y={PAD.t + 12} textAnchor="end" className="quadrant-name">Rinde y acelera</text>
@@ -218,13 +220,13 @@ function TrendQuadrant({ topics, selected, onSelect }: { topics: InstagramTrendT
           <text key={v} x={PAD.l - 6} y={y(Math.log2(v)) + 3} textAnchor="end" className="tick">×{v}</text>
         ))}
         {xTicks.map((v) => (
-          <text key={v} x={x(v)} y={H - PAD.b + 14} textAnchor="middle" className="tick">{v > 0 ? `+${v}` : v === 0 ? "0" : v}</text>
+          <text key={v} x={x(v)} y={H - PAD.b + 14} textAnchor="middle" className="tick">{v>0?"+":""}{v.toLocaleString("es",{maximumFractionDigits:1})}</text>
         ))}
         {points.map((t) => {
           const cx = x(t.momentum ?? 0), cy = y(Math.log2(t.traction!));
           const strong = ACTIONABLE.has(t.state) || t.name === selected;
           return (
-            <g key={t.name} className="quadrant-point" onClick={() => onSelect(selected === t.name ? "" : t.name)} tabIndex={0}>
+            <g key={t.name} className="quadrant-point" role="button" aria-label={`Explorar ${t.name}: tracción ${ratio(t.traction)}, momentum ${signed(t.momentum)}`} aria-pressed={selected===t.name} onClick={() => onSelect(t.name)} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();onSelect(t.name);}}} tabIndex={0}>
               <title>{`${t.name} · ${trendStates[t.state]}\nTracción ${ratio(t.traction)} · momentum ${signed(t.momentum)}\n${t.recent_creators} creadores recientes · ${t.posts} posts`}</title>
               <circle cx={cx} cy={cy} r={Math.max(12, r(t.recent_creators))} fill="transparent" />
               <circle cx={cx} cy={cy} r={r(t.recent_creators)} fill={strong ? ACCENT : MUTED} stroke="#fcfcfb" strokeWidth={2} />
@@ -243,7 +245,8 @@ function TrendQuadrant({ topics, selected, onSelect }: { topics: InstagramTrendT
         })}
       </svg>
       <small className="muted">
-        Tamaño = creadores en los últimos 14 días. En azul, los tópicos para aprovechar; pasa el cursor o haz clic en uno para ver su detalle.
+        Tamaño = creadores en los últimos 14 días. En verde, los tópicos para explorar y el seleccionado. Puedes usar el selector para ver su detalle.
+        {points.length<topics.length && ` ${topics.length-points.length} temas sin tracción positiva o momentum conocido quedan fuera del mapa; siguen disponibles en la tabla y el selector.`}
       </small>
     </div>
   );
@@ -271,13 +274,11 @@ function TopicDetail({ topic }: { topic: InstagramTrendTopic }) {
         </p>
       )}
       <p className="muted">Subtemas: {topic.subtopics.join(", ")}</p>
-      <ul className="ig-trend-evidence">
+      <div className="ds-trend-evidence-grid">
         {topic.evidence.map((e) => (
-          <li key={e.shortcode}>
-            <a href={e.url} target="_blank" rel="noopener noreferrer">@{e.username} <ArrowUpRight size={11} /></a> {ratio(e.performance)} · {e.caption.slice(0, 120)}
-          </li>
+          <article key={e.shortcode}><MediaPreview url={e.url} title={e.caption||e.shortcode} compact/><div><a href={e.url} target="_blank" rel="noopener noreferrer">@{e.username} <ArrowUpRight size={11}/></a><strong>{ratio(e.performance)}</strong><p>{e.caption.slice(0,180)}</p></div></article>
         ))}
-      </ul>
+      </div>
     </section>
   );
 }
@@ -337,6 +338,7 @@ export function PatternsStep({ data }: { data: RunPatterns | null }) {
       <div className="pipeline-verdicts">
         {data.items.filter((i) => i.features).map((i) => (
           <article key={i.shortcode} className="pipeline-verdict">
+            <MediaPreview url={i.url} title={`Pieza de ${i.username}`} compact/>
             <a href={i.url} target="_blank" rel="noopener noreferrer">
               @{i.username} · {i.group === "top" ? "destacado" : "control"} {ratio(i.performance)} <ArrowUpRight size={11} />
             </a>

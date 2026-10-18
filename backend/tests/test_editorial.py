@@ -8,7 +8,7 @@ from sqlalchemy import event
 
 from app import main, post_review, trend_runs
 from app.database import Brand, DiscoveryCandidate, DiscoveryRun, InstagramAccount, InstagramPost, PostTopicReview, RunTopicMap, TikTokAccount, TikTokPost, TrendRun, get_session
-from app.media import preview
+from app.media import preview, stored_thumbnail
 from app.trends.contracts import Report
 from app.trends.mock import MOCK
 
@@ -139,7 +139,8 @@ def test_creator_report_uses_real_baselines_and_cached_reviews(client, platform)
             p = post_model(shortcode=code, username="marca.qa", url=url, content_type="video" if platform == "tiktok" else "reel",
                            caption="Agentes de IA para equipos", likes=100 + i if i < 9 else 4000,
                            comments=5, views=(1000 + i * 10 if i < 9 else 80000) if platform == "tiktok" else None,
-                           posted_at=now - timedelta(days=4 + i * 2), observed_at=now, raw={})
+                           posted_at=now - timedelta(days=4 + i * 2), observed_at=now,
+                           raw={"thumbnail_url": "https://p16.tiktokcdn.com/fixture.jpg" if platform == "tiktok" else "https://scontent.cdninstagram.com/fixture.jpg"})
             db.add(p); db.flush()
             db.add(PostTopicReview(platform=platform, shortcode=code, topic_key=post_review.topic_key(run.topic), topic=run.topic,
                                    relevance="alta", content_kind="educativo", subtopics=["Agentes para equipos"], needs_transcript=False,
@@ -152,6 +153,7 @@ def test_creator_report_uses_real_baselines_and_cached_reviews(client, platform)
     assert t["signals"][0]["unit"] == "×" and t["series"][0]["unit"] == "piezas"
     assert sum(p["value"] for p in t["series"][0]["points"]) == 10
     assert t["evidence"][0]["performance"] > 1 and t["evidence"][0]["preview"]["platform"] == platform
+    assert t["evidence"][0]["preview"]["thumbnail_url"].endswith("/fixture.jpg")
     assert t["proposals"][0]["platform"] == platform and "agrupación semántica" in " ".join(data["warnings"])
     with session() as db:
         db.add(RunTopicMap(run_id=run_id, labels_digest="old", model="fixture", topics=[{"name": "Tema agrupado", "description": "Guardado", "labels": ["Agentes para equipos"]}]))
@@ -177,3 +179,16 @@ def test_official_media_descriptor(url, platform):
 @pytest.mark.parametrize("url", ["javascript:alert(1)", "https://evil.test/watch?v=abcdefghijk", "https://youtube.com.evil.test/watch?v=abcdefghijk", "https://user:pass@youtube.com/watch?v=abcdefghijk", "https://youtube.com:444/watch?v=abcdefghijk", "https://www.linkedin.com/in/persona", "https://youtu.be/invalid", "https://instagram.com/accounts/login/"])
 def test_untrusted_or_unsupported_media_stays_unembedded(url):
     assert preview(url)["embed_url"] is None
+
+
+def test_thumbnail_uses_saved_images_and_never_accepts_arbitrary_hosts():
+    tt = "https://www.tiktok.com/@marca/video/7412345678901234567"
+    cover = "https://p16.tiktokcdn.com/cover.jpeg?signature=fixture"
+    assert stored_thumbnail({"video": {"cover": {"url_list": [cover]}}}, "tiktok") == cover
+    assert preview(tt, thumbnail=cover)["thumbnail_url"] == cover
+    assert preview(tt, demo=True, thumbnail=cover)["thumbnail_url"] is None
+    assert preview("https://youtu.be/abcdefghijk")["thumbnail_url"] == "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"
+    for bad in ["http://p16.tiktokcdn.com/a.jpg", "https://p16.tiktokcdn.com.evil.test/a.jpg", "https://127.0.0.1/a.jpg", "https://user:pass@p16.tiktokcdn.com/a.jpg", "https://p16.tiktokcdn.com:444/a.jpg", "data:image/png;base64,AAAA"]:
+        assert stored_thumbnail({"thumbnail_url": bad}, "tiktok") is None
+        assert preview(tt, thumbnail=bad)["thumbnail_url"] is None
+    assert stored_thumbnail({"thumbnail_url": cover, "is_private": True}, "tiktok") is None

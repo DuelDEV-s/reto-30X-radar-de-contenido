@@ -17,7 +17,7 @@ from .demo import demo_batch, demo_brief
 from .discovery import discover_creators, geo_targets
 from . import discovery_store, editorial
 from .query_builder import QueryContext, build_queries
-from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult, TikTokSearchRequest, TrendRunRequest
+from .schemas import BatchCreate, BrandCreate, BrandContextRequest, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult, TikTokSearchRequest, TrendRunRequest
 from .post_resolver import OEmbedResolver, PostResolver
 from . import related_accounts
 from . import account_review
@@ -244,6 +244,31 @@ def update_identity(brand_id: str, identity: Identity, db: DB):
 @app.get("/api/profile-connectors", tags=["step-1"])
 def profile_connectors():
     return connector_status()
+
+
+@app.put("/api/brands/{brand_id}/context", tags=["step-1"])
+def update_brand_context(brand_id: str, request: BrandContextRequest, db: DB):
+    """Save declared context and reinterpret existing observations, without network calls."""
+    brand = get_brand(brand_id, db)
+    try:
+        brief = BrandCreate.model_validate(brand.brief | request.model_dump())
+    except ValueError:
+        raise HTTPException(422, "Describe la propuesta con al menos 20 caracteres y la audiencia con al menos 5; también puedes dejarlas vacías.")
+    # Apply the same contact redaction as provider texts before storing context.
+    from .profile_common import clean_text
+    brief.description = clean_text(brief.description, 5000)
+    brief.audience = clean_text(brief.audience, 1000)
+    brief.topics = [clean_text(t, 100) for t in brief.topics]
+    brand.brief = brief.model_dump(mode="json")
+    row = db.get(ProfileAnalysis, brand_id)
+    if row:
+        profiles = [ProfileResult.model_validate(p) for p in row.data.get("profiles", [])]
+        data = {**row.data, **interpret(brief, profiles)}
+        data.pop("auto_apply_digest", None)
+        row.data = data
+    # Even a draft may already have been edited. Applying a proposal is explicit.
+    db.commit()
+    return brand_output(brand, db)
 
 
 @app.post("/api/brands/{brand_id}/profiles/analyze", tags=["step-1"])

@@ -410,8 +410,10 @@ async def transcribe_run(db: Session, run: DiscoveryRun, transcriber, client) ->
 def post_dict(post, score: dict, velocity: dict | None, review) -> dict:
     # Campos que solo existen en una de las dos redes quedan en None o vacíos en la otra.
     extra = lambda key, default=None: getattr(post, key, default)
+    from .media import stored_thumbnail
     return {
         "shortcode": post.shortcode, "url": post.url, "username": post.username, "author": post.author,
+        "thumbnail_url": stored_thumbnail(post.raw, post.PLATFORM),
         "content_type": post.content_type, "caption": (post.caption or "")[:500], "hashtags": post.hashtags,
         "posted_at": post.posted_at, "observed_at": post.observed_at, "likes": post.likes, "comments": post.comments,
         "views": post.views, "plays": extra("plays"), "shares": extra("shares"), "saves": extra("saves"),

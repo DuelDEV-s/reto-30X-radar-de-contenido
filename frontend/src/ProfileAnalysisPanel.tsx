@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import type { Brand, SocialProfile } from "./types";
 import InterpretationPanel from "./InterpretationPanel";
+import BrandContextForm from "./BrandContextForm";
+import type { BrandContext } from "./types";
 
 const names: Record<string, string> = {
   instagram: "Instagram",
@@ -32,6 +34,7 @@ export default function ProfileAnalysisPanel({
   busy,
   onAnalyze,
   onInterpret,
+  onContextSave,
 }: {
   brand: Brand;
   busy: boolean;
@@ -42,6 +45,7 @@ export default function ProfileAnalysisPanel({
     refreshBrightData?: boolean,
   ) => void;
   onInterpret: (apply: boolean) => void;
+  onContextSave: (context: BrandContext) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [profiles, setProfiles] = useState(brand.brief.profiles);
@@ -50,7 +54,8 @@ export default function ProfileAnalysisPanel({
   const canEnrich =
     !!data &&
     (data.identity_evidence.length > 0 ||
-      data.profiles.some((p) => p.supplied_description));
+      data.profiles.some((p) => p.supplied_description) ||
+      !!brand.brief.description?.trim() || !!brand.brief.audience?.trim());
   function setProfile(platform: string, url: string) {
     setProfiles((items) => {
       const previous = items.find((x) => x.platform === platform);
@@ -112,7 +117,7 @@ export default function ProfileAnalysisPanel({
             disabled={busy}
             onClick={() => onInterpret(false)}
           >
-            Reinterpretar datos guardados
+            Generar personas y actualizar lectura
           </button>
           <small>
             Usa la información disponible, sin consultar proveedores ni consumir
@@ -258,6 +263,11 @@ export default function ProfileAnalysisPanel({
                         <strong>{metric(p.metrics.posts)}</strong>
                       </div>
                     </div>
+                    {p.platform === "tiktok" && <div className="profile-metrics profile-extra-metrics">
+                      <div><small>Me gusta acumulados</small><strong>{metric(p.account_details?.likes_total ?? null)}</strong></div>
+                      <div><small>Cuentas seguidas</small><strong>{metric(p.account_details?.following ?? null)}</strong></div>
+                      <div><small>Verificación informada</small><strong>{p.account_details?.is_verified === true ? "Verificada" : p.account_details?.is_verified === false ? "No verificada" : "No disponible"}</strong></div>
+                    </div>}
                     {p.metrics_notes.map((note) => (
                       <p className="muted" key={note}>
                         {note}
@@ -301,6 +311,7 @@ export default function ProfileAnalysisPanel({
               </article>
             ))}
           </div>
+          <BrandContextForm key={brand.id + JSON.stringify(brand.brief)} brand={brand} busy={busy} onSave={onContextSave} />
           <div className="analysis-proposal">
             <div className="eyebrow">
               {canEnrich

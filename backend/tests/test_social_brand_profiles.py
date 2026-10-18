@@ -28,6 +28,10 @@ def test_new_connectors_use_published_datasets_and_public_aggregate_fields(monke
     profile = result["profiles"][0]
     assert profile["status"] == "ready" and profile["metrics"]["followers"] == record["followers"]
     assert profile["metrics"]["views"] is None and profile["description"] == record.get("signature", record.get("about"))
+    if platform == "tiktok":
+        assert profile["account_details"]["likes_total"] == 900000
+        assert profile["account_details"]["following"] is None
+        assert profile["account_details"]["is_verified"] is None
     assert vendor.posts == 1
     assert "PERSONAL_FIELD" not in json.dumps(result) and "PRIVATE_FIELD" not in json.dumps(result)
     assert "employees" not in vendor.requests[0].url.params["custom_output_fields"]

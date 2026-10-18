@@ -40,6 +40,12 @@ class SocialProfile(StrictModel):
 class Persona(StrictModel):
     role: str = Field(min_length=2, max_length=120)
     need: str = Field(min_length=5, max_length=500)
+    goal: str = Field(default="", max_length=500)
+    barriers: list[str] = Field(default_factory=list, max_length=5)
+    content_angles: list[str] = Field(default_factory=list, max_length=5)
+    validation_question: str = Field(default="", max_length=500)
+    basis: Literal["declared", "textual", "exploratory", "team"] = "team"
+    evidence: list["InterpretationEvidence"] = Field(default_factory=list, max_length=6)
 
 
 class BrandCreate(StrictModel):
@@ -109,6 +115,12 @@ class InterpretationRequest(StrictModel):
     apply_to_identity: bool = False
 
 
+class BrandContextRequest(StrictModel):
+    description: str = Field(default="", max_length=5000)
+    audience: str = Field(default="", max_length=1000)
+    topics: list[str] = Field(default_factory=list, max_length=15)
+
+
 class InterpretationEvidence(StrictModel):
     source_url: str | None = None
     source_kind: Literal["brief", "profile", "post", "manual"]
@@ -129,10 +141,30 @@ class ContentPillar(StrictModel):
     evidence: list[InterpretationEvidence]
 
 
-class AudienceHypothesis(StrictModel):
-    role: str
-    need: str
-    evidence: list[InterpretationEvidence]
+class AudienceHypothesis(Persona):
+    pass
+
+
+class SampleHighlight(StrictModel):
+    url: str
+    title: str
+    views: int
+
+
+class ProfileSampleSummary(StrictModel):
+    platform: Platform
+    sample_size: int
+    with_views: int
+    median_views: float | None = None
+    formats: list[str]
+    latest_published_at: str | None = None
+    top_content: list[SampleHighlight] = Field(default_factory=list)
+
+
+class ProfileNextStep(StrictModel):
+    title: str
+    reason: str
+    action: str
 
 
 class ProfileInterpretation(StrictModel):
@@ -144,6 +176,10 @@ class ProfileInterpretation(StrictModel):
     audience_hypotheses: list[AudienceHypothesis]
     coverage: dict[str, int]
     limitations: list[str]
+    audience_readiness: Literal["needs_context", "exploratory", "text_supported"] = "needs_context"
+    missing_context: list[str] = Field(default_factory=list)
+    next_steps: list[ProfileNextStep] = Field(default_factory=list)
+    content_snapshot: list[ProfileSampleSummary] = Field(default_factory=list)
 
 
 class ProfileMetric(StrictModel):
@@ -178,6 +214,8 @@ class ProfileResult(StrictModel):
     attempts: list[dict] = Field(default_factory=list)
     fallback_used: bool = False
     collection: dict | None = None
+    # Separate from the historical three-counter contract: likes are never views.
+    account_details: dict[str, int | bool | None] = Field(default_factory=dict)
 
 
 class Snapshot(StrictModel):
