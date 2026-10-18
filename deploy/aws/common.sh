@@ -52,12 +52,15 @@ run_remote() {
   python - "$(native_path "$script_file")" "$id" "$comment" > "$request" <<'PY'
 import json, sys
 script, instance, comment = sys.argv[1:4]
+# AWS-RunShellScript runs commands with /bin/sh (dash on Ubuntu): hand the script to bash.
+command = ("cat > /root/radar-remote.sh <<'RADAR_REMOTE_EOF'\n" + open(script, encoding="utf-8").read()
+           + "\nRADAR_REMOTE_EOF\nbash /root/radar-remote.sh; rc=$?; rm -f /root/radar-remote.sh; exit $rc")
 print(json.dumps({
     "InstanceIds": [instance],
     "DocumentName": "AWS-RunShellScript",
     "Comment": comment[:100],
     "TimeoutSeconds": 600,
-    "Parameters": {"commands": [open(script, encoding="utf-8").read()], "executionTimeout": ["3600"]},
+    "Parameters": {"commands": [command], "executionTimeout": ["3600"]},
 }))
 PY
   command_id=$($AWS ssm send-command --cli-input-json "file://$(native_path "$request")" \
