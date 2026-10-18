@@ -52,9 +52,12 @@ run_remote() {
   python - "$(native_path "$script_file")" "$id" "$comment" > "$request" <<'PY'
 import json, sys
 script, instance, comment = sys.argv[1:4]
-# AWS-RunShellScript runs commands with /bin/sh (dash on Ubuntu): hand the script to bash.
+# AWS-RunShellScript runs commands with /bin/sh (dash on Ubuntu): hand the script to bash. Output is
+# reduced to plain ASCII because the AWS CLI on Windows fails to print build progress characters.
 command = ("cat > /root/radar-remote.sh <<'RADAR_REMOTE_EOF'\n" + open(script, encoding="utf-8").read()
-           + "\nRADAR_REMOTE_EOF\nbash /root/radar-remote.sh; rc=$?; rm -f /root/radar-remote.sh; exit $rc")
+           + "\nRADAR_REMOTE_EOF\n"
+           + "bash -c 'BUILDKIT_PROGRESS=plain bash /root/radar-remote.sh 2>&1 | tr -cd \"\\11\\12\\40-\\176\"; "
+           + "exit ${PIPESTATUS[0]}'; rc=$?; rm -f /root/radar-remote.sh; exit $rc")
 print(json.dumps({
     "InstanceIds": [instance],
     "DocumentName": "AWS-RunShellScript",
