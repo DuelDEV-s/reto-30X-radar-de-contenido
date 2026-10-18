@@ -1,9 +1,11 @@
 import hashlib
 import json
+import logging
 import os
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -11,16 +13,58 @@ from sqlalchemy.orm import Session
 
 from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
-from .schemas import BatchCreate, BrandCreate, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
+from .discovery import discover_creators, geo_targets
+from .query_builder import QueryContext, build_queries
+from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
+from .post_resolver import OEmbedResolver, PostResolver
+from . import related_accounts
+from .database import RelatedAccount, RelatedAccountRun
+from .profile_common import ProviderError
+from .serp import BrightDataSerpClient, SerpClient, SerpError
 from .services import analyze, draft_identity
 from .profiles import build_analysis, connector_status, TTL
 from datetime import datetime, timezone
 from .collection_jobs import DBJobStore
 from .interpretation import interpret, VERSION as INTERPRETATION_VERSION
 
+# Uvicorn solo configura sus propios loggers; esto hace visibles los logs INFO de app.* en `docker compose logs api`.
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s:     %(name)s: %(message)s")
 app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
 DB = Annotated[Session, Depends(get_session)]
+
+
+def get_serp_client():
+    try:
+        client = BrightDataSerpClient.from_env()
+    except SerpError as error:
+        raise HTTPException(503, str(error))
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+SERP = Annotated[SerpClient, Depends(get_serp_client)]
+
+
+def get_post_resolver():
+    resolver = OEmbedResolver()
+    try:
+        yield resolver
+    finally:
+        resolver.close()
+
+
+RESOLVER = Annotated[PostResolver, Depends(get_post_resolver)]
+
+
+async def get_bright_data_client():
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=False, trust_env=False) as client:
+        yield client
+
+
+BRIGHT_DATA = Annotated[httpx.AsyncClient, Depends(get_bright_data_client)]
 
 
 def get_brand(brand_id, db):
@@ -190,6 +234,55 @@ def report(brand_id: str, db: DB, batch_id: str | None = None, platform: Platfor
     if not row:
         raise HTTPException(404, "No hay un lote público. Importa datos del paso 2 o selecciona explícitamente un lote demo.")
     return {"brand_id": brand_id, "batch_id": row.id, "identity_status": brand.identity["status"], **analyze(BatchCreate.model_validate(row.data), brand.identity, platform=platform, topic=topic, limit=limit, window_days=window_days)}
+
+
+@app.post("/api/brands/{brand_id}/discovery-queries", tags=["step-2-discovery"])
+def discovery_queries(brand_id: str, request: DiscoveryQueryRequest, db: DB):
+    brand = get_brand(brand_id, db)
+    ctx = QueryContext.from_identity(brand.identity, focus_topic=request.topic, platform=request.platform, max_queries=request.max_queries, profiles_only=request.profiles_only)
+    return {"brand_id": brand_id, "identity_status": brand.identity["status"], **build_queries(ctx).model_dump()}
+
+
+@app.post("/api/brands/{brand_id}/creator-search", tags=["step-2-discovery"])
+def creator_search(brand_id: str, request: CreatorSearchRequest, db: DB, serp: SERP, resolver: RESOLVER):
+    brand = get_brand(brand_id, db)
+    plan = build_queries(QueryContext.from_identity(brand.identity, focus_topic=request.topic, max_queries=request.max_queries, profiles_only=request.profiles_only))
+    result = discover_creators(plan, serp, countries=geo_targets(brand.identity["region"], request.countries), resolver=resolver if request.resolve_posts else None)
+    if all(run.error for run in result.queries):
+        raise HTTPException(502, result.queries[0].error)
+    return {"brand_id": brand_id, "identity_status": brand.identity["status"], **result.model_dump()}
+
+
+@app.post("/api/brands/{brand_id}/related-accounts", tags=["step-1"])
+async def start_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
+    """Inicia la búsqueda de cuentas relacionadas (reels de la marca) o devuelve la que está en curso."""
+    brand = get_brand(brand_id, db)
+    if missing := related_accounts.missing_config():
+        raise HTTPException(503, "Bright Data requiere " + ", ".join(missing) + ".")
+    try:
+        run = await related_accounts.start(db, brand, client)
+    except ProviderError as error:
+        raise HTTPException(400, error.message)
+    run = await related_accounts.advance(db, run, client)
+    return related_accounts.output(db, brand_id, run)
+
+
+@app.get("/api/brands/{brand_id}/related-accounts", tags=["step-1"])
+async def read_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
+    """Cuentas guardadas. Si hay una búsqueda en curso la consulta, sin iniciar extracciones nuevas."""
+    get_brand(brand_id, db)
+    run = db.get(RelatedAccountRun, brand_id)
+    if run and run.state in related_accounts.ACTIVE and not related_accounts.missing_config():
+        run = await related_accounts.advance(db, run, client)
+    return related_accounts.output(db, brand_id, run)
+
+
+@app.get("/api/brands/{brand_id}/related-accounts/{username}/avatar", tags=["step-1"])
+def related_account_avatar(brand_id: str, username: str, db: DB):
+    account = db.scalar(select(RelatedAccount).where(RelatedAccount.brand_id == brand_id, RelatedAccount.username == username.lower()))
+    if not account or not account.avatar:
+        raise HTTPException(404, "Sin foto guardada")
+    return Response(account.avatar, media_type=account.avatar_type or "image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/api/demo", status_code=201, tags=["demo"])

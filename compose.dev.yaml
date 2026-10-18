@@ -1,0 +1,8 @@
+# Desarrollo: monta el código del backend y recarga uvicorn al guardar.
+# docker compose -f compose.yaml -f compose.dev.yaml up -d
+services:
+  api:
+    volumes:
+      - ./backend:/app
+    # Sin watchfiles, uvicorn sondea cambios por fecha de modificación; funciona también desde /mnt/c en WSL.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app"]

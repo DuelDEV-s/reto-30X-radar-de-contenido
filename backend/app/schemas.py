@@ -221,6 +221,29 @@ class ContentPiece(StrictModel):
         return self
 
 
+class DiscoveryQueryRequest(StrictModel):
+    topic: str | None = Field(default=None, min_length=2, max_length=100)
+    platform: Platform = "instagram"
+    max_queries: int = Field(default=6, ge=1, le=20)
+    profiles_only: bool = False
+
+
+class CreatorSearchRequest(StrictModel):
+    topic: str | None = Field(default=None, min_length=2, max_length=100)
+    max_queries: int = Field(default=6, ge=1, le=10)
+    profiles_only: bool = Field(default=False, description="Excluye reels, explore y tags de la búsqueda.")
+    resolve_posts: bool = Field(default=True, description="Resuelve con oEmbed el autor de posts cuya URL no incluye el usuario.")
+    countries: list[str] = Field(default_factory=list, max_length=5, description="Códigos gl de Google (mx, co, ar…). Vacío: según la región de la marca; Latinoamérica usa co. Cada país multiplica las búsquedas.")
+
+    @field_validator("countries")
+    @classmethod
+    def country_codes(cls, values):
+        values = [v.strip().lower() for v in values]
+        if any(len(v) != 2 or not v.isalpha() for v in values):
+            raise ValueError("Usa códigos de país de dos letras, por ejemplo mx o co.")
+        return values
+
+
 class BatchCreate(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     mode: Literal["public", "demo"] = "public"

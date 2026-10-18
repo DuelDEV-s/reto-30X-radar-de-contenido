@@ -153,6 +153,40 @@ export type Report = {
   limitations: string[];
 };
 
+export type RelatedAccount = {
+  username: string;
+  profile_url: string;
+  full_name: string | null;
+  biography: string | null;
+  followers: number | null;
+  following: number | null;
+  posts_count: number | null;
+  is_verified: boolean | null;
+  is_private: boolean | null;
+  category: string | null;
+  external_urls: string[];
+  relations: ("coauthor" | "tagged" | "posted")[];
+  reel_urls: string[];
+  profile_available: boolean;
+  avatar_url: string | null;
+  collected_at: string;
+};
+export type RelatedAccounts = {
+  state:
+    | "not_started"
+    | "reels_requesting"
+    | "reels_pending"
+    | "profiles_requesting"
+    | "profiles_pending"
+    | "ready"
+    | "failed"
+    | "unknown";
+  message: string;
+  brand_account: string | null;
+  requested_at: string | null;
+  updated_at: string | null;
+  accounts: RelatedAccount[];
+};
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...options,

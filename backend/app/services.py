@@ -21,9 +21,15 @@ def draft_identity(brief: BrandCreate) -> Identity:
     )
 
 
+STOPWORDS = {"de", "la", "el", "en", "para", "con", "los", "las", "del", "una", "por"}
+
+
+def normalize(text):
+    return "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
+
+
 def tokens(text):
-    text = "".join(c for c in unicodedata.normalize("NFKD", text.lower()) if not unicodedata.combining(c))
-    return set(re.findall(r"[a-z0-9]{2,}", text)) - {"de", "la", "el", "en", "para", "con", "los", "las", "del", "una", "por"}
+    return set(re.findall(r"[a-z0-9]{2,}", normalize(text))) - STOPWORDS
 
 
 def relevance(topic: str, identity: dict):
