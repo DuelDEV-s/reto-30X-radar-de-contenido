@@ -18,8 +18,9 @@ git reset --quiet --hard "origin/$BRANCH"
 echo "Code: \$(git log --oneline -1)"
 
 # Settings and secrets come from SSM Parameter Store; they never travel in this command.
+# The snap build of the AWS CLI writes nothing when stdout is redirected to a file, so pipe it.
 /snap/bin/aws ssm get-parameters-by-path --region "$REGION" --path "$PARAM_PREFIX" --recursive \
-  --with-decryption --output json > /root/radar-params.json
+  --with-decryption --output json | cat > /root/radar-params.json
 python3 - <<'PY'
 import json
 params = json.load(open("/root/radar-params.json"))["Parameters"]
