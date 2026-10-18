@@ -156,9 +156,11 @@ export default function ProfileAnalysisPanel({
               <input
                 type="url"
                 placeholder={
-                  key === "youtube"
-                    ? "https://www.youtube.com/@tu-marca"
-                    : `https://www.${key}.com/tu-marca`
+                  key === "youtube" || key === "tiktok"
+                    ? `https://www.${key}.com/@${key === "tiktok" ? "tu_marca" : "tu-marca"}`
+                    : key === "linkedin"
+                      ? "https://www.linkedin.com/company/tu-marca"
+                      : "https://www.instagram.com/tu-marca"
                 }
                 value={profiles.find((x) => x.platform === key)?.url || ""}
                 onChange={(e) => setProfile(key, e.target.value)}

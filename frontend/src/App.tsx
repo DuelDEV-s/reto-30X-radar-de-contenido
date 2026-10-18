@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
   Radar,
@@ -34,6 +34,7 @@ import type {
 import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
 import RelatedAccountsPanel from "./RelatedAccountsPanel";
 import DiscoveryWorkspace from "./DiscoveryWorkspace";
+const EditorialWorkspace = lazy(() => import("./EditorialWorkspace"));
 
 const compact = (n: number) =>
   new Intl.NumberFormat("es", {
@@ -107,6 +108,7 @@ function Sparkline({
 }
 
 export default function App() {
+  const [editorialSource, setEditorialSource] = useState("");
   const [tab, setTab] = useState("radar"),
     [brands, setBrands] = useState<Brand[]>([]),
     [brand, setBrand] = useState<Brand | null>(null);
@@ -167,7 +169,11 @@ export default function App() {
     let active = true;
     api<Brand[]>("/brands")
       .then((data) => {
-        if (active) setBrands(data);
+        if (active) {
+          setBrands(data);
+          const saved = new URLSearchParams(location.search).get("brand");
+          if (saved) setBrand(data.find((b) => b.id === saved) || null);
+        }
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -385,7 +391,7 @@ export default function App() {
       setBatches(list);
       setBatchBrandId(brand!.id);
       setBatchId(id);
-      setTab("radar");
+      setTab("classic");
       setNotice("Lote del radar LinkedIn + YouTube cargado en el paso 3.");
     });
   }
@@ -536,7 +542,7 @@ export default function App() {
                   : tab === "identity"
                     ? "Una identidad clara convierte tendencias en oportunidades relevantes."
                     : tab === "discovery"
-                      ? "Elige la red: creadores en Instagram o tendencias en LinkedIn y YouTube, con la evidencia a la vista."
+                      ? "Elige Instagram, TikTok, LinkedIn o YouTube y explora la evidencia antes de crear."
                       : "El punto de encuentro con el equipo que descubre contenido público."}
               </p>
             </div>
@@ -558,7 +564,7 @@ export default function App() {
               {notice}
             </div>
           )}
-          {currentBatch?.mode === "demo" && (
+          {tab === "classic" && currentBatch?.mode === "demo" && (
             <div className="demo-banner">
               <ScanLine size={17} />
               <strong>Estás explorando una demo.</strong>
@@ -626,7 +632,40 @@ export default function App() {
               busy={busy}
             />
           ) : tab === "discovery" ? (
-            <DiscoveryWorkspace brand={brand} onOpenBatch={openBatch} />
+            <DiscoveryWorkspace
+              brand={brand}
+              onOpenBatch={openBatch}
+              onOpenEditorial={(source) => {
+                const u = new URL(location.href);
+                u.searchParams.set("radar_source", source);
+                for (const key of [
+                  "radar_topic",
+                  "radar_search",
+                  "radar_network",
+                ])
+                  u.searchParams.delete(key);
+                history.replaceState(null, "", u);
+                setEditorialSource(source);
+                setTab("radar");
+              }}
+            />
+          ) : tab === "radar" ? (
+            <Suspense
+              fallback={
+                <div className="ed-loading" role="status">
+                  <LoaderCircle className="spin" /> Preparando informe
+                  editorial…
+                </div>
+              }
+            >
+              <EditorialWorkspace
+                key={brand.id}
+                brand={brand}
+                requestedSource={editorialSource}
+                onDiscover={() => setTab("discovery")}
+                onClassic={() => setTab("classic")}
+              />
+            </Suspense>
           ) : tab === "integration" ? (
             <Integration
               brand={brand}
@@ -1098,16 +1137,20 @@ function CreateForm({
               name={p}
               type="url"
               placeholder={
-                p === "youtube"
-                  ? "https://www.youtube.com/@tu-marca"
-                  : `https://www.${p}.com/tu-marca`
+                p === "youtube" || p === "tiktok"
+                  ? `https://www.${p}.com/@${p === "tiktok" ? "tu_marca" : "tu-marca"}`
+                  : p === "linkedin"
+                    ? "https://www.linkedin.com/company/tu-marca"
+                    : "https://www.instagram.com/tu-marca"
               }
               maxLength={500}
             />
             <small className="connector-status">
               {connector?.configured
                 ? connector.primary?.configured
-                  ? "Bright Data principal · API oficial como respaldo"
+                  ? p === "instagram" || p === "youtube"
+                    ? "Bright Data principal · API oficial como respaldo"
+                    : "Bright Data · perfiles públicos de marca"
                   : "API oficial disponible como respaldo"
                 : connector?.missing.length
                   ? "Requiere credenciales de servidor"
