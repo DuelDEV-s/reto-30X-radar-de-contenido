@@ -49,7 +49,7 @@ run_remote() {
   id=$(instance_id)
   [ -n "$id" ] || die "No $NAME-app instance. Run provision.sh first."
   request=$(mktemp)
-  python - "$script_file" "$id" "$comment" > "$request" <<'PY'
+  python - "$(native_path "$script_file")" "$id" "$comment" > "$request" <<'PY'
 import json, sys
 script, instance, comment = sys.argv[1:4]
 print(json.dumps({
