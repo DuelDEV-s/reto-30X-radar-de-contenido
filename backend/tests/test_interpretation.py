@@ -33,11 +33,14 @@ def test_ice_cream_identity_is_concise_local_and_evidence_backed():
     identity, detail = out["suggested_identity"], out["interpretation"]
     assert len(identity["summary"]) < 700
     assert "Ibagué" in identity["summary"] and identity["region"] == "Ibagué"
-    assert {"helados", "postres", "planes para compartir", "pedidos y domicilios"} <= set(identity["topics"])
+    assert {"helados", "postres", "pedidos y domicilios"} <= set(identity["topics"])
+    assert "planes para compartir" in {p["topic"] for p in detail["pillars"]}
+    assert not {"planes para compartir", "historia de la marca"} & set(identity["topics"])
     assert "agentes de ia" not in identity["topics"]
     assert "cucharada" not in identity["summary"]  # Summary is not a caption dump.
     assert detail["local_focus"] == "Ibagué"
-    assert detail["audience_hypotheses"] and all(p["need"].startswith("Hipótesis por validar:") for p in identity["personas"])
+    assert detail["audience_hypotheses"]
+    assert [p["need"] for p in identity["personas"]] == [p["need"] for p in detail["audience_hypotheses"]]
     assert detail["coverage"]["pieces_with_views"] == 0 and detail["coverage"]["pieces_with_known_format"] == 0
     assert any("no se clasifican" in text for text in detail["limitations"])
     assert all(p["evidence"] and p["measurement"] for p in detail["pillars"])
@@ -67,6 +70,45 @@ def test_one_off_topic_post_does_not_redefine_the_business():
     out = interpret(brand(), [value])
     assert "helados" not in out["suggested_identity"]["topics"]
     assert "moda vintage" in out["suggested_identity"]["topics"]
+
+
+@pytest.mark.parametrize("description,posts", [
+    ("Tienda de figuras de colección y decoración.", [
+        "Comparte este video con amigos y familia. La historia de este personaje.",
+        "Descubre la historia de los cómics. Comparte con tus amigos y crea una conexión.",
+    ]),
+    ("Creamos software y automatización para empresas.", [
+        "Aprende a compartir archivos con tu equipo. Trabajamos juntos.",
+        "La historia de internet y las familias de protocolos de conexión.",
+    ]),
+    ("Contenido sobre series de animación y teorías.", [
+        "La historia de Dipper nació de una idea. Comparte con amigos.",
+        "Una familia de personajes que viven juntos: la historia continúa.",
+    ]),
+])
+def test_generic_story_and_share_words_do_not_create_business_angles(description, posts):
+    out = interpret(brand(), [profile(description, posts)])
+    unwanted = {"planes para compartir", "historia de la marca"}
+    assert not unwanted & set(out["suggested_identity"]["topics"])
+    assert not unwanted & {p["topic"] for p in out["interpretation"]["pillars"]}
+    assert all(p["role"] != "Personas que buscan planes para compartir" for p in out["suggested_identity"]["personas"])
+
+
+def test_editorial_angles_require_profile_context_or_repeated_explicit_posts():
+    isolated = interpret(brand(), [profile("Vendemos ropa vintage.", ["Un plan en pareja para este fin de semana."])])
+    assert "planes para compartir" not in {p["topic"] for p in isolated["interpretation"]["pillars"]}
+    explicit = interpret(brand(), [profile("Nuestra historia como tienda de ropa vintage. Organizamos planes en familia.")])
+    angles = {"planes para compartir", "historia de la marca"}
+    assert angles <= {p["topic"] for p in explicit["interpretation"]["pillars"]}
+    assert not angles & set(explicit["suggested_identity"]["topics"])
+    repeated = interpret(brand(), [profile("Vendemos ropa vintage.", ["Organizamos un plan en pareja.", "Reserva otro plan en pareja para el viernes."])])
+    assert "planes para compartir" in {p["topic"] for p in repeated["interpretation"]["pillars"]}
+
+
+def test_explicit_team_topics_are_preserved_including_editorial_angles():
+    brief = brand(topics=["historia de la marca", "planes para compartir", "coleccionables"])
+    out = interpret(brief, [profile("Tienda de figuras y decoración.")])
+    assert set(brief.topics) <= set(out["suggested_identity"]["topics"])
 
 
 def test_non_usable_source_does_not_feed_identity_or_audience():

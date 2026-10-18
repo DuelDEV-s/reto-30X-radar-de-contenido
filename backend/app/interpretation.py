@@ -16,7 +16,7 @@ from .schemas import (
 )
 from .services import draft_identity
 
-VERSION = "3.0"
+VERSION = "3.1"
 
 
 def normalized(text):
@@ -68,13 +68,16 @@ RELATED = (
 # Editorial intentions work across sectors. Match evidence before proposing them.
 INTENTS = {
     "experiencia del lugar": (("visítanos", "visitanos", "ambiente", "instagrameable", "nuestro local", "nuestras sedes"), "Mostrar qué puede esperar una persona al visitar el lugar y cerrar con una invitación concreta.", "Visitas o consultas sobre cómo llegar, registradas por el equipo."),
-    "planes para compartir": (("compartir", "juntos", "amigos", "familia", "pareja", "personas favoritas", "conexión"), "Proponer una ocasión para compartir vinculada a la oferta de la marca y preguntar con quién la disfrutarían.", "Respuestas sobre la ocasión propuesta y consultas atribuibles a la pieza."),
-    "historia de la marca": (("nuestra historia", "la historia", "tradición", "todo comenzó", "nació de", "nuestros inicios"), "Contar un momento de la historia de la marca que esté documentado y conectarlo con su propuesta actual.", "Preguntas sobre la marca y respuestas al relato; no asumir intención de compra."),
+    "planes para compartir": (("planes para compartir", "experiencia para compartir", "para compartir juntos", "para compartir con tus personas favoritas", "plan en familia", "planes en familia", "plan en pareja", "planes en pareja", "plan con amigos", "planes con amigos", "disfrutar en familia", "disfrutar con amigos", "salir con amigos", "celebrar en familia"), "Proponer una ocasión para compartir vinculada a la oferta de la marca y preguntar con quién la disfrutarían.", "Respuestas sobre la ocasión propuesta y consultas atribuibles a la pieza."),
+    "historia de la marca": (("nuestra historia", "nuestros inicios", "historia de nuestra marca", "historia de nuestra empresa", "historia de nuestro negocio", "fundamos nuestra", "fundamos nuestro", "así nació nuestra marca", "así nació nuestro negocio"), "Contar un momento de la historia de la marca que esté documentado y conectarlo con su propuesta actual.", "Preguntas sobre la marca y respuestas al relato; no asumir intención de compra."),
     "pedidos y domicilios": (("domicilios", "delivery", "pedidos", "pide", "envíos", "envío", "a domicilio"), "Explicar cómo realizar un pedido, indicando que horarios, cobertura y condiciones deben confirmarse con la marca.", "Consultas y pedidos atribuidos al enlace o código de la publicación."),
     "aprendizaje práctico": (("aprende", "aprender", "tutorial", "paso a paso", "cómo usar", "guía", "enseñamos"), "Resolver una pregunta concreta con un ejemplo verificable y proponer que la audiencia lo pruebe.", "Preguntas resueltas y resultados de la prueba reportados por la audiencia."),
     "proceso y elaboración": (("preparamos", "elaboración", "preparación", "detrás de", "hecho a mano", "fabricamos", "ingredientes"), "Mostrar una etapa del proceso real y explicar una decisión, sin atribuir cualidades que no estén verificadas.", "Preguntas sobre el proceso y consultas sobre el producto mostrado."),
     "conversación con la comunidad": (("sígueme", "siguiéndome", "seguirnos", "comunidad", "fans", "fandom", "qué opinas", "teorías"), "Proponer una pregunta sobre un tema ya presente en la cuenta y dar una razón concreta para volver.", "Respuestas que desarrollan la conversación y seguimiento de la cuenta en una prueba nueva."),
 }
+# These describe editorial angles, not what the business offers. Only an explicit
+# team topic can promote them to the brand's search topics.
+EDITORIAL_ANGLES = {"planes para compartir", "historia de la marca"}
 
 
 @dataclass
@@ -250,7 +253,11 @@ def interpret(brief, profiles):
         facts.append(InterpretationFact(label="Oferta o temas comunicados", value=", ".join(labels), evidence=evidence))
         pillars.append(ContentPillar(topic=" y ".join(labels[:2]), rationale="Hay menciones explícitas en el brief, la biografía, varias piezas o una pieza relacionada con la oferta identificada.", idea=f"Mostrar un ejemplo concreto de {labels[0]} comunicado por la marca y explicar qué ofrece; cerrar con una pregunta o una acción que pueda medirse.", measurement="Consultas o acciones atribuidas a la pieza, medidas en una prueba nueva.", evidence=evidence))
     for label, (expressions, idea, measure) in INTENTS.items():
+        if label == "historia de la marca":
+            expressions = (*expressions, f"historia de {brief.name}", f"inicios de {brief.name}")
         matches, evidence = evidence_for(docs, expressions)
+        if label in EDITORIAL_ANGLES and not (any(d.kind != "post" for d in matches) or len(matches) >= 2):
+            continue
         if matches:
             pillars.append(ContentPillar(topic=label, rationale="Intención editorial identificada en el texto disponible; no prueba que este contenido rinda mejor.", idea=idea, measurement=measure, evidence=evidence))
     if not pillars and docs:
@@ -288,7 +295,7 @@ def interpret(brief, profiles):
         if "pedidos y domicilios" in by_topic:
             summary += " También comunica un servicio de pedidos o domicilios."
         identity.summary = summary
-        topic_candidates = brief.topics + [c[0] for c in anchored] + [p.topic for p in pillars]
+        topic_candidates = brief.topics + [c[0] for c in anchored] + [p.topic for p in pillars if p.topic not in EDITORIAL_ANGLES]
         unique_topics = {}
         for topic in topic_candidates:
             if topic:
@@ -298,7 +305,7 @@ def interpret(brief, profiles):
         if not brief.audience and hypotheses:
             identity.audience = "Por validar: " + "; ".join(h.role for h in hypotheses[:3])
         if hypotheses:
-            identity.personas = [Persona(**(h.model_dump() | {"need": ("Hipótesis por validar: " + h.need)[:500]})) for h in hypotheses]
+            identity.personas = [Persona(**h.model_dump()) for h in hypotheses]
 
     eligible_profiles = [p for p in profiles if p.status == "ready" and p.usable_for_identity]
     samples = {c.url: c for p in eligible_profiles for c in p.content_sample}

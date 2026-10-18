@@ -2,6 +2,8 @@
 
 La interpretación v3 propone segmentos editoriales: rol, necesidad, objetivo, barreras por comprobar, ideas de contenido, pregunta de validación y referencias. Cada segmento indica si proviene de contexto declarado, señales textuales o una hipótesis exploratoria. No infiere edad, género, ingresos, ubicación de seguidores ni intención de compra a partir de contadores.
 
+En la versión 3.1, «historia de la marca» y «planes para compartir» son ángulos editoriales: requieren expresiones concretas en el contexto del perfil/equipo o en varias piezas distintas. Palabras sueltas como «historia», «familia» o «compartir» no los activan. No se agregan automáticamente a los tópicos de búsqueda de la marca; se conservan si el equipo los declara expresamente. Las necesidades se redactan directamente, con su fundamento indicado por separado. La pantalla omite también el prefijo generado en registros anteriores y conserva el resumen de la muestra en el JSON exportable.
+
 El motor sigue siendo local, por reglas y vocabulario ampliable; no ejecuta un LLM ni garantiza detectar todos los sectores. No se fuerza un número de segmentos cuando la evidencia no alcanza. Una bio que solo pide seguidores produce, como máximo, una persona exploratoria sobre la decisión de seguir la cuenta; no permite adivinar qué publica.
 
 ## Completar contexto sin otra extracción
