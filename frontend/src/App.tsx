@@ -32,6 +32,7 @@ import type {
   SocialProfile,
 } from "./types";
 import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
+import RelatedAccountsPanel from "./RelatedAccountsPanel";
 
 const compact = (n: number) =>
   new Intl.NumberFormat("es", {
@@ -1191,6 +1192,7 @@ function IdentityEditor({
         onAnalyze={onAnalyze}
         onInterpret={onInterpret}
       />
+      <RelatedAccountsPanel brand={brand} />
       <section className="identity-layout">
         <div className="panel">
           <div className="eyebrow">PASO 01 · IDENTIDAD DE MARCA</div>

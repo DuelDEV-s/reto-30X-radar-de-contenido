@@ -4,7 +4,8 @@ import logging
 import os
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,9 @@ from .discovery import discover_creators, geo_targets
 from .query_builder import QueryContext, build_queries
 from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
 from .post_resolver import OEmbedResolver, PostResolver
+from . import related_accounts
+from .database import RelatedAccount, RelatedAccountRun
+from .profile_common import ProviderError
 from .serp import BrightDataSerpClient, SerpClient, SerpError
 from .services import analyze, draft_identity
 from .profiles import build_analysis, connector_status, TTL
@@ -53,6 +57,14 @@ def get_post_resolver():
 
 
 RESOLVER = Annotated[PostResolver, Depends(get_post_resolver)]
+
+
+async def get_bright_data_client():
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=False, trust_env=False) as client:
+        yield client
+
+
+BRIGHT_DATA = Annotated[httpx.AsyncClient, Depends(get_bright_data_client)]
 
 
 def get_brand(brand_id, db):
@@ -239,6 +251,38 @@ def creator_search(brand_id: str, request: CreatorSearchRequest, db: DB, serp: S
     if all(run.error for run in result.queries):
         raise HTTPException(502, result.queries[0].error)
     return {"brand_id": brand_id, "identity_status": brand.identity["status"], **result.model_dump()}
+
+
+@app.post("/api/brands/{brand_id}/related-accounts", tags=["step-1"])
+async def start_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
+    """Inicia la búsqueda de cuentas relacionadas (reels de la marca) o devuelve la que está en curso."""
+    brand = get_brand(brand_id, db)
+    if missing := related_accounts.missing_config():
+        raise HTTPException(503, "Bright Data requiere " + ", ".join(missing) + ".")
+    try:
+        run = await related_accounts.start(db, brand, client)
+    except ProviderError as error:
+        raise HTTPException(400, error.message)
+    run = await related_accounts.advance(db, run, client)
+    return related_accounts.output(db, brand_id, run)
+
+
+@app.get("/api/brands/{brand_id}/related-accounts", tags=["step-1"])
+async def read_related_accounts(brand_id: str, db: DB, client: BRIGHT_DATA):
+    """Cuentas guardadas. Si hay una búsqueda en curso la consulta, sin iniciar extracciones nuevas."""
+    get_brand(brand_id, db)
+    run = db.get(RelatedAccountRun, brand_id)
+    if run and run.state in related_accounts.ACTIVE and not related_accounts.missing_config():
+        run = await related_accounts.advance(db, run, client)
+    return related_accounts.output(db, brand_id, run)
+
+
+@app.get("/api/brands/{brand_id}/related-accounts/{username}/avatar", tags=["step-1"])
+def related_account_avatar(brand_id: str, username: str, db: DB):
+    account = db.scalar(select(RelatedAccount).where(RelatedAccount.brand_id == brand_id, RelatedAccount.username == username.lower()))
+    if not account or not account.avatar:
+        raise HTTPException(404, "Sin foto guardada")
+    return Response(account.avatar, media_type=account.avatar_type or "image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/api/demo", status_code=201, tags=["demo"])
