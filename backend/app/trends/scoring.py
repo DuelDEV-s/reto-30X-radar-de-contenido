@@ -128,6 +128,8 @@ class TopicStats:
     stage: str = "insufficient_data"
     growth_raw: float = 0.0
     growth_pct: float = 0.0
+    growth_prev_raw: float = 0.0
+    signal: float = 0.0          # mode-specific opportunity signal, 0..1 (see score_topics)
     demand_level: str = "low"
     confidence: float = 0.0
 
@@ -191,26 +193,47 @@ def topic_stats(items: list[Item], topic_ids: list[str], now: datetime, weeks: i
     return out
 
 
-def score_topics(stats: dict[str, TopicStats]) -> None:
-    """li_gap, trend status, combined growth, stage, demand level, confidence (all in place)."""
+MODES = ("both", "youtube", "linkedin")
+
+
+def score_topics(stats: dict[str, TopicStats], mode: str = "both") -> None:
+    """Trend status, growth, stage, demand level, confidence and the opportunity signal (in place).
+
+    mode "both":     signal = li_gap = pct_rank(YouTube demand x quality) - pct_rank(LinkedIn supply)
+    mode "youtube":  signal = pct_rank(YouTube demand x quality); no supply side, li_gap = 0
+    mode "linkedin": signal = growing but not crowded: 0.5 pct_rank(LinkedIn growth) + 0.5 (1 - pct_rank(authors));
+                     no demand side, so every topic is "untested"
+    """
     if not stats:
         return
+    use_yt, use_li = mode in ("both", "youtube"), mode in ("both", "linkedin")
     s_all = list(stats.values())
     dq = pct_rank({s.topic_id: s.yt_demand * max(s.yt_quality or 1.0, 0.1) for s in s_all})
     supply = pct_rank({s.topic_id: s.li_items for s in s_all})
     p_mom = pct_rank({s.topic_id: s.yt_momentum for s in s_all})
     p_lig = pct_rank({s.topic_id: s.li_growth for s in s_all})
     p_dem = pct_rank({s.topic_id: s.yt_demand for s in s_all})
+    p_auth = pct_rank({s.topic_id: s.li_authors_7d for s in s_all})
     li_g60 = percentile([s.li_growth for s in s_all], 0.6)
     mom_50 = percentile([s.yt_momentum for s in s_all], 0.5)
+    w_yt, w_li = (0.6, 0.4) if mode == "both" else (1.0, 0.0) if mode == "youtube" else (0.0, 1.0)
     for s in s_all:
-        s.li_gap = round(dq[s.topic_id] - supply[s.topic_id], 3)
-        s.growth_raw = 0.6 * s.yt_momentum + 0.4 * s.li_growth
-        s.growth_pct = 0.6 * p_mom[s.topic_id] + 0.4 * p_lig[s.topic_id]
-        s.trend_status = trend_status(s, li_g60, mom_50)
-        s.demand_level = "high" if p_dem[s.topic_id] >= 0.67 else "medium" if p_dem[s.topic_id] >= 0.33 else "low"
-        # Floor of 0.2 so LinkedIn-only topics (no YouTube presence) still rank, just lower.
-        sample = max(0.2, math.sqrt(min(1, s.yt_items / 30)))
+        t = s.topic_id
+        s.li_gap = round(dq[t] - supply[t], 3) if mode == "both" else 0.0
+        s.signal = round((s.li_gap + 1) / 2 if mode == "both" else dq[t] if mode == "youtube"
+                         else 0.5 * p_lig[t] + 0.5 * (1 - p_auth[t]), 3)
+        s.growth_raw = w_yt * s.yt_momentum + w_li * s.li_growth
+        s.growth_prev_raw = w_yt * s.yt_momentum_prev + w_li * s.li_growth_prev
+        s.growth_pct = w_yt * p_mom[t] + w_li * p_lig[t]
+        s.trend_status = (trend_status(s, li_g60, mom_50) if mode == "both"
+                          else youtube_status(s, mom_50) if mode == "youtube" else "untested")
+        s.demand_level = ("high" if p_dem[t] >= 0.67 else "medium" if p_dem[t] >= 0.33 else "low") if use_yt else "low"
+        if mode == "linkedin":
+            sample = math.sqrt(min(1, s.li_items / 20))
+        else:
+            # Floor of 0.2 in "both" so LinkedIn-only topics (no YouTube presence) still rank, just lower.
+            sample = math.sqrt(min(1, s.yt_items / 30))
+            sample = max(0.2, sample) if use_li else sample
         s.confidence = round(sample * STATUS_WEIGHT[s.trend_status], 3)
     th = {
         "nov75": percentile([s.novelty for s in s_all], 0.75),
@@ -224,7 +247,7 @@ def score_topics(stats: dict[str, TopicStats]) -> None:
         "q40": percentile([s.yt_quality for s in s_all], 0.40),
     }
     for s in s_all:
-        s.stage = stage(s, th)
+        s.stage = stage(s, th, use_quality=use_yt)
 
 
 def trend_status(s: TopicStats, li_growth_p60: float, momentum_p50: float) -> str:
@@ -239,20 +262,31 @@ def trend_status(s: TopicStats, li_growth_p60: float, momentum_p50: float) -> st
     return "stable"
 
 
-def stage(s: TopicStats, th: dict) -> str:
+def youtube_status(s: TopicStats, momentum_p50: float) -> str:
+    """YouTube alone: validated when the audience over-rewards the topic or its attention is rising."""
+    if s.yt_items < 5:
+        return "untested"
+    if (s.yt_quality or 0) >= 1.5 or (s.yt_momentum > 0 and s.yt_momentum >= momentum_p50):
+        return "validated"
+    return "stable"
+
+
+def stage(s: TopicStats, th: dict, use_quality: bool = True) -> str:
+    """Lifecycle stage. Without YouTube there is no quality signal, so its conditions are skipped."""
     items = s.yt_items + s.li_items
     creators_now = s.creators_weekly[-1] if s.creators_weekly else 0
     creators_prev = s.creators_weekly[-2] if len(s.creators_weekly) > 1 else 0
     quality = s.yt_quality or 0
-    prev_raw = 0.6 * s.yt_momentum_prev + 0.4 * s.li_growth_prev
+    rewarded = quality >= th["q60"] if use_quality else True
+    unrewarded = quality <= th["q40"] if use_quality else s.growth_pct <= th["g40"]
     if items < 5:
         return "insufficient_data"
     if (s.novelty >= th["nov75"] and s.growth_pct >= th["g75"] and creators_now <= th["c50"]
-            and quality >= th["q60"] and s.growth_raw > 0.3):
+            and rewarded and s.growth_raw > 0.3):
         return "emerging"
-    if s.growth_raw < 0 and prev_raw < 0 and s.growth_pct <= th["g25"]:
+    if s.growth_raw < 0 and s.growth_prev_raw < 0 and s.growth_pct <= th["g25"]:
         return "declining"
-    if creators_now >= th["c75"] and quality <= th["q40"]:
+    if creators_now >= th["c75"] and unrewarded:
         return "saturated"
     if s.growth_pct >= th["g60"] and creators_now > creators_prev and s.growth_raw > 0.1:
         return "growing"
@@ -262,10 +296,12 @@ def stage(s: TopicStats, th: dict) -> str:
         return "growing"
     if s.growth_raw < -0.1:
         return "declining"
+    if not use_quality:
+        return "peak"
     return "peak" if quality >= 1 else "saturated"
 
 
 def opportunity_score(s: TopicStats, persona_rel: float, brand_fit: float, coverage_gap: float) -> float:
-    raw = (0.25 * (s.li_gap + 1) / 2 + 0.20 * s.growth_pct + 0.20 * persona_rel
+    raw = (0.25 * s.signal + 0.20 * s.growth_pct + 0.20 * persona_rel
            + 0.15 * brand_fit + 0.10 * STAGE_BONUS[s.stage] + 0.10 * coverage_gap)
     return round(raw * s.confidence, 4)

@@ -52,7 +52,10 @@ export default function DiscoveryWorkspace({ brand, onOpenBatch }: { brand: Bran
       <section className="network-picker" aria-label="Red social para descubrir">
         <div className="network-picker-head">
           <div className="eyebrow">PASO 02 · ¿DÓNDE BUSCAMOS?</div>
-          <p className="muted">LinkedIn y YouTube se pueden combinar en un mismo radar. Instagram usa su propia búsqueda de creadores.</p>
+          <p className="muted">
+            Cada red corre por separado. LinkedIn + YouTube juntos miden la brecha entre lo que la audiencia consume y
+            lo que se publica. Instagram usa su propia búsqueda de creadores.
+          </p>
         </div>
         <div className="network-options" role="group">
           {NETWORKS.map((n) => {

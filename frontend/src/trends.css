@@ -545,3 +545,26 @@
     flex-direction: column;
   }
 }
+.trend-mode-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f6f4ea;
+  border: 1px solid #ebe3c8;
+  color: #6f6236;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.trend-columns.single {
+  grid-template-columns: 1fr;
+}
+.net-pill.linkedin {
+  background: #e3eefa;
+  border-color: #c9dcf2;
+  color: #1f5a9a;
+}
+.net-pill.youtube {
+  background: #fbe9e7;
+  border-color: #f2cfca;
+  color: #a8322b;
+}

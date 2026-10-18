@@ -6,6 +6,7 @@ from datetime import timedelta
 
 from . import config, db as store, linkedin
 from .providers import search
+from .providers.youtube import QuotaExceeded
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ def youtube_discovery(db, yt, queries, regions: list[str], since: str, date_orde
         for order in orders:
             try:
                 ids = yt.search(q.text, since, q.lang, region, order=order)
+            except QuotaExceeded:      # cached searches keep working; the rest are skipped
+                continue
             except Exception as e:      # one failed query must not stop the run
                 log.warning("youtube search failed for %r: %s", q.text, e)
                 continue

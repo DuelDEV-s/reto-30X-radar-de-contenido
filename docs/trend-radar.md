@@ -4,6 +4,18 @@ Módulo de descubrimiento para LinkedIn y YouTube. Toma la identidad guardada de
 
 En la interfaz: **Descubrimiento → ¿Dónde buscamos?** Instagram usa la búsqueda de creadores existente. LinkedIn y YouTube, solos o combinados, usan este radar.
 
+## Modos según la red elegida
+
+Solo se consultan las redes elegidas; cada combinación tiene su propio historial de corridas.
+
+| Selección | Qué se consulta | Prioridad (señal de oportunidad) | Propuestas |
+| --- | --- | --- | --- |
+| LinkedIn | Exa (+ Brave) | Temas cuyas publicaciones crecen con pocos autores | LinkedIn: post, carrusel, video, artículo, encuesta, documento |
+| YouTube | YouTube Data API | Demanda × rendimiento frente a lo normal de cada canal | YouTube: video o short |
+| LinkedIn + YouTube | Ambas | Brecha demanda (YouTube) − oferta (LinkedIn) | La red que mejor encaje en cada caso |
+
+LinkedIn no expone vistas ni reacciones, así que en modo solo LinkedIn la demanda no se mide (los tópicos quedan "sin validar"). Para la brecha demanda/oferta hay que combinar ambas redes.
+
 ## Fuentes (solo APIs oficiales)
 
 | Fuente | Rol | Qué aporta | Clave |

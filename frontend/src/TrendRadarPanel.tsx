@@ -59,8 +59,38 @@ const STATUS: Record<TrendTopic["linkedin"]["trend_status"], string> = {
   untested: "Sin validar en YouTube",
   stable: "Estable",
 };
+const YT_STATUS: Record<TrendTopic["linkedin"]["trend_status"], string> = {
+  validated: "Rinde sobre lo normal",
+  hype_risk: "Rinde bajo lo normal",
+  untested: "Pocos videos",
+  stable: "Estable",
+};
 const DEMAND = { high: "Alta", medium: "Media", low: "Baja" };
 const NETWORK: Record<TrendPlatform, string> = { linkedin: "LinkedIn", youtube: "YouTube" };
+type Mode = "both" | "linkedin" | "youtube";
+const modeOf = (platforms: TrendPlatform[]): Mode => (platforms.length > 1 ? "both" : platforms[0]);
+const MODE_COPY: Record<Mode, { title: string; intro: string; scope: string; note?: string }> = {
+  both: {
+    title: "¿Qué pide tu audiencia y quién lo está publicando?",
+    intro:
+      "YouTube mide la demanda real (vistas frente a lo normal de cada canal) y LinkedIn muestra cuánto se publica del tema. Donde la demanda supera a la oferta hay una oportunidad, y el radar la convierte en propuestas con evidencia.",
+    scope: "Brecha demanda/oferta · propuestas para ambas redes",
+  },
+  linkedin: {
+    title: "¿Qué temas crecen en LinkedIn y quién los publica?",
+    intro:
+      "Busca posts públicos de LinkedIn sobre tus tópicos, mide qué temas ganan publicaciones semana a semana y cuántos autores los cubren, y propone contenido para LinkedIn.",
+    scope: "Solo LinkedIn · sin YouTube",
+    note: "LinkedIn no expone vistas ni reacciones, así que sin YouTube no se mide la demanda. Combina LinkedIn + YouTube para ver la brecha entre lo que la audiencia consume y lo que se publica.",
+  },
+  youtube: {
+    title: "¿Qué temas premia hoy la audiencia en YouTube?",
+    intro:
+      "Busca videos sobre tus tópicos, compara sus vistas con lo normal de cada canal para detectar qué despega, lee las preguntas de la audiencia y propone videos y shorts.",
+    scope: "Solo YouTube · sin LinkedIn",
+    note: "Sin LinkedIn no se mide cuánto se publica de cada tema. Combina LinkedIn + YouTube para encontrar huecos donde la demanda supera a la oferta.",
+  },
+};
 const compact = (n: number) =>
   new Intl.NumberFormat("es", { notation: "compact", maximumFractionDigits: 1 }).format(n);
 const pct = (n: number) => `${n > 0 ? "+" : ""}${Math.round(n * 100)}%`;
@@ -92,19 +122,30 @@ export default function TrendRadarPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // Each selection (LinkedIn, YouTube or both) is its own radar: only its runs are listed.
+  const key = [...platforms].sort().join("+");
+  const visible = runs.filter((r) => [...r.platforms].sort().join("+") === key);
+
   async function loadRuns(select?: string) {
     const list = await api<TrendRunSummary[]>(`/brands/${brand.id}/trend-runs`);
     setRuns(list);
-    setRunId((current) => select || current || list[0]?.id || "");
+    if (select) setRunId(select);
   }
 
   useEffect(() => {
+    setRuns([]);
     setRun(null);
     setRunId("");
     setError("");
     api<TrendEngineStatus>("/trend-engine").then(setEngine).catch(() => setEngine(null));
     loadRuns().catch((e) => setError(e.message));
   }, [brand.id]);
+
+  useEffect(() => {
+    if (visible.some((r) => r.id === runId)) return;
+    setRun(null);
+    setRunId(visible[0]?.id || "");
+  }, [key, runs]);
 
   useEffect(() => {
     if (!runId) return;
@@ -123,6 +164,7 @@ export default function TrendRadarPanel({
       api<TrendRunDetail>(`/trend-runs/${run.id}`, { signal: controller.signal })
         .then((data) => {
           setRun(data);
+          setError("");
           if (!ACTIVE.has(data.status)) loadRuns(data.id).catch(() => {});
         })
         .catch((e) => !controller.signal.aborted && setError(e.message));
@@ -153,18 +195,15 @@ export default function TrendRadarPanel({
 
   const label = platforms.map((p) => NETWORK[p]).join(" + ");
   const anyActive = runs.some((r) => ACTIVE.has(r.status));
+  const copy = MODE_COPY[modeOf(platforms)];
   return (
     <div className="trend-radar">
       <section className="panel">
         <div className="profile-panel-heading">
           <div>
             <div className="eyebrow">PASO 02 · RADAR {label.toUpperCase()}</div>
-            <h2>¿Qué pide tu audiencia y quién lo está publicando?</h2>
-            <p className="muted">
-              YouTube mide la demanda real (vistas frente a lo normal de cada canal) y LinkedIn muestra cuánto se
-              publica del tema. Donde la demanda supera a la oferta hay una oportunidad, y el radar la convierte en
-              propuestas con evidencia. Solo APIs oficiales y contenido público.
-            </p>
+            <h2>{copy.title}</h2>
+            <p className="muted">{copy.intro} Solo APIs oficiales y contenido público.</p>
           </div>
           <Radar size={22} />
         </div>
@@ -187,7 +226,7 @@ export default function TrendRadarPanel({
           <div className="trend-form-scope">
             <small>Muestra</small>
             <strong>{label}</strong>
-            <span>{platforms.includes("youtube") ? "Con detalle de videos" : "YouTube como sensor de demanda interno"}</span>
+            <span>{copy.scope}</span>
           </div>
           <button className="button dark" disabled={busy || anyActive || (engine ? !engine.configured : false)}>
             {busy || anyActive ? <LoaderCircle size={15} className="spin" /> : <Sparkles size={15} />}
@@ -199,16 +238,15 @@ export default function TrendRadarPanel({
           mientras corre.
           {engine && ` Modelos: ${engine.models.bulk} en lote y ${engine.models.top} para propuestas.`}
         </small>
+        {copy.note && <p className="trend-mode-note">{copy.note}</p>}
         {error && <p className="profile-message">{error}</p>}
       </section>
 
-      {!!runs.length && (
+      {!!visible.length && (
         <div className="pipeline-runs">
-          {runs.map((r) => (
+          {visible.map((r) => (
             <button key={r.id} className={r.id === runId ? "active" : ""} onClick={() => setRunId(r.id)}>
-              <strong>
-                {r.platforms.map((p) => NETWORK[p]).join(" + ")} · {r.window_days} días
-              </strong>
+              <strong>Radar · {r.window_days} días</strong>
               <small>
                 {new Date(r.created_at).toLocaleString("es")} ·{" "}
                 {r.status === "done"
@@ -223,7 +261,7 @@ export default function TrendRadarPanel({
       )}
 
       {!run ? (
-        !runs.length && (
+        !visible.length && (
           <div className="empty">
             <Radar size={32} />
             <h3>Tu primer radar de {label}</h3>
@@ -241,7 +279,7 @@ export default function TrendRadarPanel({
           </div>
         </section>
       ) : run.report ? (
-        <Results run={run} platforms={platforms} onOpenBatch={onOpenBatch} />
+        <Results run={run} onOpenBatch={onOpenBatch} />
       ) : null}
     </div>
   );
@@ -269,15 +307,7 @@ function Progress({ run }: { run: TrendRunDetail }) {
   );
 }
 
-function Results({
-  run,
-  platforms,
-  onOpenBatch,
-}: {
-  run: TrendRunDetail;
-  platforms: TrendPlatform[];
-  onOpenBatch: (batchId: string) => void;
-}) {
+function Results({ run, onOpenBatch }: { run: TrendRunDetail; onOpenBatch: (batchId: string) => void }) {
   const report = run.report!;
   const items = useMemo(() => new Map(report.items.map((i) => [i.item_id, i])), [report]);
   const topics = useMemo(() => new Map(report.topics.map((t) => [t.topic_id, t])), [report]);
@@ -285,26 +315,39 @@ function Results({
     () => new Map(run.identity.personas.map((p) => [p.id, p.name])),
     [run.identity],
   );
-  const showVideos = platforms.includes("youtube");
+  const platforms = run.platforms;
+  const mode = modeOf(platforms);
+  const useYt = platforms.includes("youtube");
+  const useLi = platforms.includes("linkedin");
   const cost = report.run.cost_usd.search + report.run.cost_usd.llm;
+  const target = platforms.map((p) => NETWORK[p]).join(" y ");
   return (
     <>
       <div className="stats trend-stats">
-        <Stat label="Propuestas" value={String(report.opportunities.length)} note="Listas para publicar en LinkedIn" />
+        <Stat label="Propuestas" value={String(report.opportunities.length)} note={`Para publicar en ${target}`} />
         <Stat label="Tópicos detectados" value={String(report.topics.length)} note={`${report.run.window.from} → ${report.run.window.to}`} />
-        <Stat label="Posts de LinkedIn" value={compact(report.run.sources.linkedin.items)} note={`Índices: ${report.run.sources.linkedin.providers.join(", ")}`} />
-        <Stat
-          label="Videos de YouTube"
-          value={compact(report.run.sources.youtube.items)}
-          note={showVideos ? `${report.run.sources.youtube.creators} canales` : "Sensor de demanda interno"}
-        />
+        {useLi && (
+          <Stat label="Posts de LinkedIn" value={compact(report.run.sources.linkedin.items)} note="Públicos, vía índices de búsqueda" />
+        )}
+        {useYt && (
+          <Stat label="Videos de YouTube" value={compact(report.run.sources.youtube.items)} note={`${report.run.sources.youtube.creators} canales`} />
+        )}
+        {mode !== "both" && <Stat label="Costo de la corrida" value={usd(cost)} note="Búsquedas y modelos" />}
       </div>
 
       <section className="panel">
         <div className="trend-section-head">
           <div>
             <h2>Qué publicar esta semana</h2>
-            <p className="muted">Ordenadas por oportunidad: brecha demanda/oferta, crecimiento, afinidad con tus personas y lo que tu marca aún no cubre.</p>
+            <p className="muted">
+              Ordenadas por oportunidad:{" "}
+              {mode === "both"
+                ? "brecha demanda/oferta"
+                : mode === "youtube"
+                  ? "demanda y rendimiento de los videos"
+                  : "crecimiento de publicaciones con pocos autores"}
+              , afinidad con tus personas y lo que tu marca aún no cubre.
+            </p>
           </div>
           {run.batch_id && (
             <button className="button small" onClick={() => onOpenBatch(run.batch_id!)}>
@@ -321,7 +364,7 @@ function Results({
                 topic={topics.get(o.topic_id)}
                 persona={personas.get(o.persona) || o.persona}
                 items={items}
-                showVideos={showVideos}
+                showNetwork={mode === "both"}
               />
             ))}
           </div>
@@ -333,8 +376,11 @@ function Results({
       <section className="panel">
         <h2>Tópicos del mercado</h2>
         <p className="muted">
-          Brecha = demanda en YouTube menos oferta en LinkedIn (de −100 a +100). Un valor alto indica que la audiencia
-          lo quiere y pocos lo publican.
+          {mode === "both"
+            ? "Brecha = demanda en YouTube menos oferta en LinkedIn (de −100 a +100). Un valor alto indica que la audiencia lo quiere y pocos lo publican."
+            : mode === "youtube"
+              ? "Demanda = atención semanal de los videos del tema; ×N = cuánto rinden frente a lo normal de su canal."
+              : "Posts y autores por semana en LinkedIn. Un tema que crece con pocos autores es una oportunidad para llegar primero."}
         </p>
         <div className="pipeline-table-wrap">
           <table className="pipeline-table trend-table">
@@ -342,9 +388,9 @@ function Results({
               <tr>
                 <th>Tópico</th>
                 <th>Etapa</th>
-                <th>LinkedIn · posts por semana</th>
-                <th>Demanda YouTube</th>
-                <th>Brecha</th>
+                {useLi && <th>LinkedIn · posts por semana</th>}
+                {useYt && <th>Demanda YouTube</th>}
+                {mode === "both" && <th>Brecha</th>}
                 <th>Prioridad</th>
               </tr>
             </thead>
@@ -357,16 +403,23 @@ function Results({
                   </td>
                   <td>
                     <span className={`trend-chip stage-${t.stage}`}>{STAGE[t.stage]}</span>
-                    <small className={`trend-status status-${t.linkedin.trend_status}`}>{STATUS[t.linkedin.trend_status]}</small>
+                    {mode !== "linkedin" && (
+                      <small className={`trend-status status-${t.linkedin.trend_status}`}>
+                        {(mode === "youtube" ? YT_STATUS : STATUS)[t.linkedin.trend_status]}
+                      </small>
+                    )}
                   </td>
+                  {useLi && (
                   <td>
                     <div className="trend-cell">
                       <Bars values={t.linkedin.timeseries.map((w) => w.posts)} />
                       <span>
-                        {t.linkedin.posts_7d} en 7 días · {pct(t.linkedin.growth_wow)}
+                        {t.linkedin.posts_7d} en 7 días · {t.linkedin.authors_7d} autores · {pct(t.linkedin.growth_wow)}
                       </span>
                     </div>
                   </td>
+                  )}
+                  {useYt && (
                   <td>
                     <div className="trend-cell">
                       <Line values={t.demand.timeseries.map((w) => w.attention)} />
@@ -376,9 +429,12 @@ function Results({
                       </span>
                     </div>
                   </td>
-                  <td>
-                    <Gap value={t.linkedin.li_gap} />
-                  </td>
+                  )}
+                  {mode === "both" && (
+                    <td>
+                      <Gap value={t.linkedin.li_gap} />
+                    </td>
+                  )}
                   <td>
                     <strong>{Math.round(t.opportunity_score * 100)}</strong>
                     <small className="trend-entities">confianza {Math.round(t.confidence * 100)}%</small>
@@ -390,7 +446,7 @@ function Results({
         </div>
       </section>
 
-      <div className="trend-columns">
+      <div className={useYt ? "trend-columns" : "trend-columns single"}>
         <section className="panel">
           <h3>
             <TrendingUp size={16} /> Ganchos que funcionan
@@ -412,6 +468,7 @@ function Results({
             <p className="muted">Sin muestra suficiente para medir patrones en esta corrida.</p>
           )}
         </section>
+        {useYt && (
         <section className="panel">
           <h3>
             <MessageCircleQuestion size={16} /> Lo que pregunta la audiencia
@@ -432,19 +489,28 @@ function Results({
             <p className="muted">Sin comentarios suficientes en los videos destacados.</p>
           )}
         </section>
+        )}
       </div>
 
       <details className="panel trend-method">
         <summary>Cómo se calculó, costo y límites</summary>
         <p>
-          Corrida del {new Date(report.run.generated_at).toLocaleString("es")} · costo {usd(cost)} · cuota de YouTube{" "}
-          {report.run.sources.youtube.quota_used} unidades · cobertura {report.data_quality.coverage_level}.
+          Corrida del {new Date(report.run.generated_at).toLocaleString("es")} · costo {usd(cost)}
+          {useYt && ` · cuota de YouTube ${report.run.sources.youtube.quota_used} unidades`} · cobertura{" "}
+          {report.data_quality.coverage_level}.
         </p>
-        <p>
-          LinkedIn no expone reacciones ni vistas por API: el radar mide cuántos posts y autores publican cada tema y su
-          visibilidad en los índices de búsqueda, nunca cifras de engagement. Las vistas vienen de la API oficial de
-          YouTube. Los videos con vistas observadas quedan como lote del paso 3.
-        </p>
+        {useLi && (
+          <p>
+            LinkedIn no expone reacciones ni vistas por API: el radar mide cuántos posts y autores publican cada tema y
+            su visibilidad en los índices de búsqueda, nunca cifras de engagement.
+          </p>
+        )}
+        {useYt && (
+          <p>
+            Las vistas vienen de la API oficial de YouTube. La serie de cada video crece con cada observación (una al
+            descubrirlo y otra cada pocas horas); los videos con vistas observadas quedan como lote del paso 3.
+          </p>
+        )}
         {report.data_quality.warnings.map((w) => (
           <p key={w}>• {w}</p>
         ))}
@@ -458,13 +524,13 @@ function OpportunityCard({
   topic,
   persona,
   items,
-  showVideos,
+  showNetwork,
 }: {
   o: TrendOpportunity;
   topic?: TrendTopic;
   persona: string;
   items: Map<string, TrendItem>;
-  showVideos: boolean;
+  showNetwork: boolean;
 }) {
   const [first, ...rest] = o.proposal.title_options;
   return (
@@ -483,6 +549,7 @@ function OpportunityCard({
       </p>
       <blockquote>{o.proposal.hook}</blockquote>
       <div className="related-account-pills">
+        {showNetwork && <span className={`pill net-pill ${o.platform}`}>{NETWORK[o.platform]}</span>}
         <span className="pill">{persona}</span>
         <span className="pill">{o.format}</span>
         <span className="pill">{o.proposal.length}</span>
@@ -515,7 +582,6 @@ function OpportunityCard({
               {youtube && item.metrics && (
                 <b>
                   {compact(item.metrics.views)} vistas{item.metrics.outlier !== null && ` · ${item.metrics.outlier}x`}
-                  {!showVideos && " · demanda"}
                 </b>
               )}
               <ArrowUpRight size={11} />

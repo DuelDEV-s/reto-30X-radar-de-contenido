@@ -24,11 +24,11 @@ def query_languages(m: Markets) -> list[str]:
     return langs
 
 
-def coverage(db, identity: BrandIdentity, yt, spend) -> tuple[str | None, list[str]]:
+def coverage(db, identity: BrandIdentity, yt, spend, use_linkedin: bool = True) -> tuple[str | None, list[str]]:
     """Titles or excerpts of the brand's own recent content. Stops at the first source that works."""
     texts: list[str] = []
     source = None
-    if config.secret("EXA_API_KEY", required=False):
+    if use_linkedin and config.secret("EXA_API_KEY", required=False):
         start = store.iso(store.now_utc() - timedelta(days=180))
         results = search.exa_search(db, spend, f"{identity.brand_name} {identity.general_topic}", start, 25)
         name = identity.brand_name.lower()

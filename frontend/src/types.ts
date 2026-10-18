@@ -381,10 +381,17 @@ export type TrendRunDetail = TrendRunSummary & {
   report: TrendReport | null;
 };
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options?.headers },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    // El navegador solo dice "Failed to fetch": la API no responde (detenida o reiniciándose).
+    throw new Error("No hay conexión con la API. Verifica que el backend esté en marcha y vuelve a intentarlo.");
+  }
   if (!response.ok) {
     let detail = `Error ${response.status}`;
     try {

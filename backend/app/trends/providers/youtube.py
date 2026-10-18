@@ -40,9 +40,13 @@ class YouTube:
         self.db = db
         self.key = key or config.secret("YOUTUBE_API_KEY")
         self.units = 0
+        self.quota_exhausted = False      # 403: every endpoint is out for today
+        self.search_blocked = False       # 429: only search.list hit its per-day query limit
         self.http = httpx.Client(timeout=30)
 
     def _get(self, endpoint: str, **params) -> dict:
+        if self.quota_exhausted or (endpoint == "search" and self.search_blocked):
+            raise QuotaExceeded(f"YouTube {endpoint}: daily quota exhausted")   # skip a call bound to fail
         self.units += COST[endpoint]
         for attempt in range(4):          # transient disconnects happen on long runs
             try:
@@ -54,8 +58,12 @@ class YouTube:
                 time.sleep(2 ** attempt)
         if r.status_code == 404:
             return {}
-        if r.status_code == 403 and "quota" in r.text.lower():
-            raise QuotaExceeded("YouTube daily quota exhausted")
+        if r.status_code in (403, 429) and "quota" in r.text.lower():
+            if r.status_code == 429 and endpoint == "search":
+                self.search_blocked = True
+            else:
+                self.quota_exhausted = True
+            raise QuotaExceeded(f"YouTube {endpoint}: daily quota exhausted")
         if r.status_code >= 400:
             msg = r.json().get("error", {}).get("message", r.text[:200]) if r.text else r.reason_phrase
             raise RuntimeError(f"YouTube {endpoint} {r.status_code}: {msg}")

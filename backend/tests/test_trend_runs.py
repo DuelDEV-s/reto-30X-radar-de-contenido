@@ -172,6 +172,14 @@ def test_batch_skips_points_that_break_the_contract():
     assert trend_runs.to_batch([], "run-1", "30X") is None
 
 
+def test_batch_spaces_out_close_observations():
+    # Readings minutes apart (reruns) would give meaningless velocities: keep >= 3 h apart, latest first.
+    times = [NOW - timedelta(hours=h) for h in (30, 29.9, 12, 11.95, 2, 1.9)]
+    p = piece("close", []) | {"snapshots": [(iso(t), v) for t, v in zip(times, [100, 101, 300, 301, 900, 910])]}
+    snaps = trend_runs.to_batch([p], "run-1", "30X").posts[0].snapshots
+    assert [s.views for s in snaps] == [101, 301, 910]
+
+
 def test_request_validation(setup):
     client, _ = setup
     b = brand(client)

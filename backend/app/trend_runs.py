@@ -24,6 +24,7 @@ from .trends.contracts import BrandIdentity, Markets
 log = logging.getLogger(__name__)
 ACTIVE = ("queued", "running")
 STALE_AFTER = timedelta(minutes=45)     # el proceso se reinició a mitad de una corrida
+MIN_SNAPSHOT_GAP = timedelta(hours=3)   # separación mínima entre observaciones exportadas al paso 3
 PLACEHOLDER_TOPICS = {"por definir"}
 
 # Región libre de la identidad -> idiomas y países de búsqueda.
@@ -183,15 +184,20 @@ def execute(run_id: str, session_factory=None) -> None:
 # --- Lote v1 para el paso 3 ---------------------------------------------------------
 def _piece(p: dict, run_id: str) -> dict | None:
     published = datetime.fromisoformat(p["published_at"].replace("Z", "+00:00"))
-    snapshots, last = [], None
-    for captured_at, views in p["snapshots"]:
-        observed = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
-        # El contrato exige fechas crecientes y vistas acumuladas no decrecientes: se omite el
-        # punto que lo rompa (YouTube a veces descuenta vistas) en vez de corregir su valor.
-        if observed < published or (last and (observed <= last[0] or views < last[1])):
-            continue
-        snapshots.append({"observed_at": observed.isoformat(), "views": int(views)})
-        last = (observed, views)
+    points = sorted((datetime.fromisoformat(c.replace("Z", "+00:00")), v) for c, v in p["snapshots"])
+    # El contrato exige vistas acumuladas no decrecientes: se omite el punto que lo rompe (YouTube a veces
+    # descuenta vistas) en vez de corregir su valor.
+    monotonic: list[tuple[datetime, int]] = []
+    for observed, views in points:
+        if observed >= published and (not monotonic or views >= monotonic[-1][1]):
+            monotonic.append((observed, views))
+    # Desde la más reciente hacia atrás, observaciones separadas al menos MIN_SNAPSHOT_GAP: dos lecturas
+    # a minutos de distancia dan velocidades sin sentido.
+    kept: list[tuple[datetime, int]] = []
+    for observed, views in reversed(monotonic):
+        if not kept or kept[-1][0] - observed >= MIN_SNAPSHOT_GAP:
+            kept.append((observed, views))
+    snapshots = [{"observed_at": o.isoformat(), "views": int(v)} for o, v in reversed(kept)]
     title = (p["title"] or "").strip()
     topic = p["topic"].strip().lower()[:100]
     if not snapshots or len(title) < 3 or len(topic) < 2:

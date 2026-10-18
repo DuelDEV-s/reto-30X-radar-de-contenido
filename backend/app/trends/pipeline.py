@@ -73,13 +73,17 @@ class Run:
         markets = bootstrap.markets(idn)
         langs = bootstrap.query_languages(markets)
         main_lang = markets.languages[0]
+        # The selected networks decide what is collected: YouTube = audience demand, LinkedIn = supply.
+        use_yt, use_li = "youtube" in idn.output_platforms, "linkedin" in idn.output_platforms
+        mode = "both" if use_yt and use_li else "youtube" if use_yt else "linkedin"
 
         self.stage("bootstrap")
         try:
-            cov_source, cov_texts = bootstrap.coverage(db, idn, self.yt, self.spend)
+            cov_source, cov_texts = bootstrap.coverage(db, idn, self.yt if use_yt else None, self.spend,
+                                                       use_linkedin=use_li)
         except Exception as e:
             cov_source, cov_texts = None, []
-            self.warnings.append(f"Coverage lookup failed: {e}")
+            self.warnings.append(f"No se pudo leer el contenido propio de la marca: {e}")
         voice = bootstrap.voice(self.llm, idn, cov_texts or [idn.description])
 
         self.stage("queries")
@@ -101,19 +105,21 @@ class Run:
             if window_days < idn.window_days:
                 continue
             since = self.now - timedelta(days=window_days)
-            self.stage(f"youtube ({window_days}d)")
-            try:
-                yt_ids |= collect.youtube_discovery(db, self.yt, queries, markets.regions,
-                                                    store.iso(since), DATE_ORDER_QUERIES)
-                creators = {r[0] for r in db.execute(
-                    f"SELECT DISTINCT creator_id FROM items WHERE item_id IN ({','.join('?' * len(yt_ids))})",
-                    list(yt_ids))} if yt_ids else set()
-                collect.refresh_channels(db, self.yt, creators)
-                collect.youtube_baselines(db, self.yt, creators)
-            except QuotaExceeded:
-                self.warnings.append("YouTube daily quota exhausted; demand uses the videos collected so far.")
-            self.stage(f"linkedin ({window_days}d)")
-            li_texts |= collect.linkedin_discovery(db, self.spend, queries, markets.regions, since, self.now)
+            if use_yt:
+                self.stage(f"youtube ({window_days}d)")
+                try:
+                    yt_ids |= collect.youtube_discovery(db, self.yt, queries, markets.regions,
+                                                        store.iso(since), DATE_ORDER_QUERIES)
+                    creators = {r[0] for r in db.execute(
+                        f"SELECT DISTINCT creator_id FROM items WHERE item_id IN ({','.join('?' * len(yt_ids))})",
+                        list(yt_ids))} if yt_ids else set()
+                    collect.refresh_channels(db, self.yt, creators)
+                    collect.youtube_baselines(db, self.yt, creators)
+                except QuotaExceeded:
+                    pass        # reported once below, with what was collected
+            if use_li:
+                self.stage(f"linkedin ({window_days}d)")
+                li_texts |= collect.linkedin_discovery(db, self.spend, queries, markets.regions, since, self.now)
             self.stage("classify")
             normalize.classify(db, self.llm, idn, sorted(yt_ids | set(li_texts)), li_texts,
                                plan.negative_keywords, main_lang)
@@ -121,9 +127,18 @@ class Run:
             if n_rel >= config.SPARSE_ITEMS or window_days >= 90 or self.yt.units > 6000:
                 break
             coverage_level = {28: "widened_56d", 56: "widened_90d"}.get(window_days, "widened_90d")
-            self.warnings.append(f"Only {n_rel} relevant items in {window_days} days; widening the window.")
+            self.warnings.append(f"Solo {n_rel} piezas relevantes en {window_days} días; se amplió la ventana.")
         if self._relevant_count(yt_ids | set(li_texts)) < config.SPARSE_ITEMS:
             coverage_level = "sparse"
+        if self.yt.quota_exhausted or self.yt.search_blocked:
+            self.warnings.append("Se agotó la cuota diaria de YouTube: se usaron los videos ya consultados y las "
+                                 "búsquedas guardadas. La cuota se renueva a medianoche (hora del Pacífico).")
+        if mode == "linkedin":
+            self.warnings.append("Solo LinkedIn: sin YouTube no se mide la demanda de la audiencia; la prioridad usa "
+                                 "el crecimiento de publicaciones y cuántos autores cubren cada tema.")
+        elif mode == "youtube":
+            self.warnings.append("Solo YouTube: sin LinkedIn no se mide cuánto se publica; la prioridad usa la "
+                                 "demanda y el rendimiento de los videos frente a lo normal de cada canal.")
         weeks = max(2, math.ceil(window_days / 7))
         since = self.now - timedelta(days=window_days)
 
@@ -134,7 +149,12 @@ class Run:
         self.stage("topics")
         phrase_counts = Counter(r["topic_phrase"] for r in rows if r["topic_phrase"])
         if not phrase_counts:
-            raise RuntimeError("No relevant items found for this brand; check the queries and API keys.")
+            if use_yt and not use_li and (self.yt.quota_exhausted or self.yt.search_blocked):
+                raise RuntimeError("Se agotó la cuota diaria de búsquedas de YouTube y no hay resultados guardados "
+                                   "para esta marca. Vuelve a intentarlo después de medianoche (hora del Pacífico) "
+                                   "o ejecuta el radar solo con LinkedIn.")
+            raise RuntimeError("No se encontraron piezas relevantes para esta marca. Revisa los tópicos de la "
+                               "identidad y las claves de las APIs.")
         taxonomy = topic_mod.build_taxonomy(self.llm, idn, phrase_counts, cov_texts, main_lang)
         phrase_map = topic_mod.map_phrases(self.llm, taxonomy, list(phrase_counts))
         tax = {t.topic_id: t for t in taxonomy.topics}
@@ -144,7 +164,7 @@ class Run:
         by_id = {it.item_id: it for it in items}
         self.item_topics = {it.item_id: tax[it.topic_id].label for it in items if it.topic_id in tax}
         stats = scoring.topic_stats(items, list(tax), self.now, weeks, main_lang)
-        scoring.score_topics(stats)
+        scoring.score_topics(stats, mode)
 
         self.stage("judge")
         titles = {r["item_id"]: r["title"] or r["excerpt"] or "" for r in rows}
@@ -153,7 +173,7 @@ class Run:
         top_li = {t: sorted((it for it in items if it.topic_id == t and it.platform == "linkedin"),
                             key=lambda it: it.proxy, reverse=True)[:3] for t in tax}
         judged_ids = sorted(tax, key=lambda t: (stats[t].yt_demand, stats[t].li_items), reverse=True)
-        payload = [self._topic_payload(tax[t], stats[t], top_yt[t], top_li[t], titles)
+        payload = [self._topic_payload(tax[t], stats[t], top_yt[t], top_li[t], titles, use_yt, use_li)
                    for t in judged_ids[:TOP_TOPICS_JUDGED]]
         judgments = opp_mod.judge_topics(self.llm, idn, payload, main_lang)
         persona_ids = [p.id for p in idn.personas]
@@ -189,16 +209,18 @@ class Run:
                             reverse=True)[:50]
         patterns = pat.youtube_lift(items, titles, li_all_top) + pat.linkedin_usage(li_all_top)
         audience = []
-        if self.spent() < config.run_budget_usd() * 0.6:
+        if not use_yt:
+            pass        # audience questions come from YouTube comments
+        elif self.spent() < config.run_budget_usd() * 0.6:
             catalog = "\n".join(f"{t.topic_id}: {t.label}" for t in taxonomy.topics)
             top_videos = sorted((it for it in items if it.platform == "youtube" and it.outlier()),
                                 key=lambda it: it.outlier(), reverse=True)
             try:
                 audience = pat.audience_voice(self.llm, self.yt, top_videos, catalog, main_lang)
             except Exception as e:
-                self.warnings.append(f"Audience voice skipped: {e}")
+                self.warnings.append(f"No se pudieron leer los comentarios de la audiencia: {e}")
         else:
-            self.warnings.append("Audience voice skipped to stay inside the run budget.")
+            self.warnings.append("Se omitieron los comentarios de la audiencia para no superar el presupuesto de la corrida.")
         asks = {a.topic_id for a in audience if a.topic_id}
 
         self.stage("opportunities")
@@ -216,10 +238,7 @@ class Run:
             opp_payload.append({
                 "id": f"op{n}", "type": kind, "topic_id": tp.topic_id, "topic": tp.label,
                 "score": tp.opportunity_score, "stage": s.stage, "trend_status": s.trend_status,
-                "metrics": {"li_gap": s.li_gap, "linkedin_posts_7d": s.li_weekly[-1],
-                            "linkedin_authors_7d": s.li_authors_7d, "linkedin_growth_wow": round(s.li_growth, 2),
-                            "youtube_demand_momentum_wow": round(s.yt_momentum, 2),
-                            "youtube_median_outlier": s.yt_quality, "youtube_videos": s.yt_items},
+                "metrics": self._metrics(s, use_yt, use_li),
                 "persona_relevance": tp.persona_relevance,
                 "audience_questions": [a.theme for a in audience if a.topic_id == tp.topic_id][:3],
                 "evidence_items": ev})
@@ -241,7 +260,8 @@ class Run:
                                           creators=len(yt_creators), quota_used=self.yt.units,
                                           visibility="public" if "youtube" in idn.output_platforms else "internal"),
                     linkedin=LinkedInSource(items=sum(it.platform == "linkedin" for it in items),
-                                            providers=[p for p, n in self.spend.calls.items() if n] or ["cache"])),
+                                            providers=([p for p, n in self.spend.calls.items() if n] or ["cache"])
+                                            if use_li else [])),
                 cost_usd=Cost(search=round(self.spend.usd, 3), llm=round(self.llm.usd, 3))),
             brand=BrandInfo(coverage_source=cov_source, coverage_topics=[t.label for t in taxonomy.topics
                                                                         if t.covered_by_brand >= 0.5],
@@ -346,19 +366,33 @@ class Run:
                 it.proxy = proxies.get(it.item_id, 0.0)
         return items
 
-    def _topic_payload(self, tt, s: scoring.TopicStats, top_yt, top_li, titles) -> dict:
-        return {
-            "topic_id": tt.topic_id, "label": tt.label, "description": tt.description,
-            "stage": s.stage, "trend_status": s.trend_status,
-            "youtube": {"videos": s.yt_items, "demand_momentum_wow": round(s.yt_momentum, 2),
-                        "median_outlier": s.yt_quality,
-                        "top_videos": [{"title": titles.get(it.item_id, ""), "views": it.views,
-                                        "outlier": it.outlier()} for it in top_yt]},
-            "linkedin": {"posts_in_window": s.li_items, "posts_7d": s.li_weekly[-1],
-                         "authors_7d": s.li_authors_7d, "growth_wow": round(s.li_growth, 2),
-                         "li_gap": s.li_gap,
-                         "top_posts": [titles.get(it.item_id, "")[:200] for it in top_li]},
-        }
+    def _topic_payload(self, tt, s: scoring.TopicStats, top_yt, top_li, titles, use_yt, use_li) -> dict:
+        out = {"topic_id": tt.topic_id, "label": tt.label, "description": tt.description, "stage": s.stage}
+        if use_yt:
+            out["youtube"] = {"videos": s.yt_items, "demand_momentum_wow": round(s.yt_momentum, 2),
+                              "median_outlier": s.yt_quality,
+                              "top_videos": [{"title": titles.get(it.item_id, ""), "views": it.views,
+                                              "outlier": it.outlier()} for it in top_yt]}
+        if use_li:
+            out["linkedin"] = {"posts_in_window": s.li_items, "posts_7d": s.li_weekly[-1],
+                               "authors_7d": s.li_authors_7d, "growth_wow": round(s.li_growth, 2),
+                               "top_posts": [titles.get(it.item_id, "")[:200] for it in top_li]}
+        if use_yt and use_li:
+            out |= {"trend_status": s.trend_status, "li_gap": s.li_gap}
+        return out
+
+    @staticmethod
+    def _metrics(s: scoring.TopicStats, use_yt: bool, use_li: bool) -> dict:
+        m = {}
+        if use_li:
+            m |= {"linkedin_posts_7d": s.li_weekly[-1], "linkedin_authors_7d": s.li_authors_7d,
+                  "linkedin_growth_wow": round(s.li_growth, 2)}
+        if use_yt:
+            m |= {"youtube_demand_momentum_wow": round(s.yt_momentum, 2),
+                  "youtube_median_outlier": s.yt_quality, "youtube_videos": s.yt_items}
+        if use_yt and use_li:
+            m["li_gap"] = s.li_gap
+        return m
 
     def _evidence(self, it: scoring.Item, titles) -> dict:
         e = {"item_id": it.item_id, "platform": it.platform, "text": titles.get(it.item_id, "")[:200]}

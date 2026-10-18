@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from app.trends import linkedin, scoring
@@ -125,6 +126,11 @@ def test_numbers_ok_accepts_input_numbers_and_percentages():
     # "0.857" is a decimal, not 857 with a thousands separator
     assert numbers_ok("una brecha de 0.857 y -0.464", allowed_numbers({"gap": 0.857, "g": -0.464}))
     assert numbers_ok("la demanda baja 38%", allowed_numbers({"momentum": -0.38}))
+    # Numbers quoted from an evidence title and large growth ratios are part of the input too.
+    opp = {"metrics": {"youtube_demand_momentum_wow": 17.07},
+           "evidence_items": [{"text": "5 clients in 30 days (no audience, no ads)", "views": 19000}]}
+    assert numbers_ok("'5 clients in 30 days' creció 1707%", allowed_numbers(opp))
+    assert not numbers_ok("llegó a 45 clientes", allowed_numbers(opp))
 
 
 def test_persona_relevance_from_rubric():
@@ -138,3 +144,62 @@ def test_mock_report_matches_contract():
     ids = {i.item_id for i in report.items}
     assert all(e in ids for o in report.opportunities for e in o.evidence)
     assert '"from"' in report.to_json()
+
+
+# --- Platform modes -------------------------------------------------------------
+def _yt_only_items():
+    items = [_item(f"a{i}", "youtube", "t1", d, views=50_000, base=10_000) for i, d in enumerate([1, 2, 3, 9, 10, 20])]
+    items += [_item(f"b{i}", "youtube", "t2", d, views=800, base=4_000) for i, d in enumerate([2, 12, 13, 19, 22])]
+    scoring.normalize_attention(items, NOW)
+    return items
+
+
+def test_youtube_mode_ranks_by_demand_without_supply():
+    stats = scoring.topic_stats(_yt_only_items(), ["t1", "t2"], NOW, 4, "es")
+    scoring.score_topics(stats, "youtube")
+    assert stats["t1"].li_gap == 0 == stats["t2"].li_gap
+    assert stats["t1"].signal > stats["t2"].signal
+    assert stats["t1"].trend_status == "validated" and stats["t2"].trend_status != "hype_risk"
+    assert stats["t1"].confidence > 0
+
+
+def test_linkedin_mode_uses_supply_growth_and_never_claims_validation():
+    items = [_item(f"l{i}", "linkedin", "t1", d, creator=f"a{i}") for i, d in enumerate([1, 1, 2, 3, 5, 6, 9])]
+    items += [_item(f"m{i}", "linkedin", "t2", d, creator="same") for i, d in enumerate([8, 9, 10, 12, 15, 16, 20])]
+    stats = scoring.topic_stats(items, ["t1", "t2"], NOW, 4, "es")
+    scoring.score_topics(stats, "linkedin")
+    assert {s.trend_status for s in stats.values()} == {"untested"}
+    assert stats["t1"].li_growth > stats["t2"].li_growth and stats["t1"].growth_pct > stats["t2"].growth_pct
+    assert all(s.li_gap == 0 and s.stage != "insufficient_data" for s in stats.values())
+    assert stats["t1"].confidence > 0
+
+
+def test_youtube_quota_429_stops_further_searches(monkeypatch):
+    import httpx
+    from app.trends import db as store
+    from app.trends.providers.youtube import QuotaExceeded, YouTube
+
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(429, json={"error": {"message": "Quota exceeded for quota metric 'Search Queries'"}})
+
+    yt = YouTube(store.connect(":memory:"), key="k")
+    yt.http = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(QuotaExceeded):
+        yt.search("ia", "2026-10-01T00:00:00Z", "es", "MX")
+    with pytest.raises(QuotaExceeded):
+        yt.search("otra", "2026-10-01T00:00:00Z", "es", "MX")
+    assert len(calls) == 1 and yt.search_blocked and not yt.quota_exhausted
+
+
+def test_proposal_platform_and_format_follow_the_selection():
+    from app.trends.opportunities import ProposalOut, validate
+    opp = {"evidence_items": [{"item_id": "yt:a"}], "metrics": {}}
+    base = dict(opportunity_id="op1", persona="exec", why_now="Crece", title_options=["a", "b", "c"],
+                hook="h", outline=["x"], length="8 min", evidence=["yt:a"])
+    ok = ProposalOut(platform="youtube", format="short", **base)
+    assert validate(ok, opp, {"exec"}, ["youtube"]) is None
+    assert "not valid for youtube" in validate(ProposalOut(platform="youtube", format="carousel", **base), opp, {"exec"}, ["youtube"])
+    assert "was not selected" in validate(ProposalOut(platform="linkedin", format="post", **base), opp, {"exec"}, ["youtube"])

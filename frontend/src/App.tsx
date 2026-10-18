@@ -46,6 +46,9 @@ const platforms: Record<string, string> = {
   tiktok: "TikTok",
   youtube: "YouTube",
 };
+const sameDaySeries = (points: Point[]) =>
+  new Set(points.map((p) => new Date(p.observed_at).toDateString())).size <
+  points.length;
 const titleCase = (v: string) =>
   (v.charAt(0).toUpperCase() + v.slice(1)).replace(/\bia\b/gi, "IA");
 
@@ -955,9 +958,13 @@ export default function App() {
             <div className="chart-dates">
               {selected.top_content.snapshots.map((p) => (
                 <span key={p.observed_at}>
-                  {new Date(p.observed_at).toLocaleDateString("es", {
+                  {new Date(p.observed_at).toLocaleString("es", {
                     day: "numeric",
                     month: "short",
+                    // Observaciones del mismo día: la hora distingue cada punto.
+                    ...(sameDaySeries(selected.top_content.snapshots)
+                      ? { hour: "2-digit", minute: "2-digit" }
+                      : {}),
                   })}
                   <strong>{compact(p.views)}</strong>
                 </span>

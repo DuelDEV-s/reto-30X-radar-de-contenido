@@ -32,7 +32,8 @@ class Judgments(BaseModel):
 
 JUDGE_SYSTEM = """You evaluate content topics for a brand's content team. Score honestly; most topics
 should not score 3 everywhere. Every number you write must come from the input metrics. Never invent
-engagement numbers for LinkedIn: LinkedIn data is post counts and author counts only."""
+engagement numbers for LinkedIn: LinkedIn data is post counts and author counts only. Only describe the
+platforms present in the metrics."""
 
 
 def judge_topics(llm, identity: BrandIdentity, payload: list[dict], main_lang: str) -> dict[str, TopicJudgment]:
@@ -42,7 +43,7 @@ def judge_topics(llm, identity: BrandIdentity, payload: list[dict], main_lang: s
 Personas:
 {personas}
 
-Topics with their metrics (YouTube = audience demand; LinkedIn = how many people post about it):
+Topics with their metrics (YouTube, when present = audience demand; LinkedIn, when present = how many people post about it):
 {json.dumps(payload, ensure_ascii=False, indent=1)}
 
 For every topic: score each persona 0-3 on problem, actionable, level, market; give brand_fit 0-1; and
@@ -96,23 +97,30 @@ def numbers_in(text: str) -> list[tuple[float, ...]]:
     return out
 
 
+RATIO_KEYS = ("growth", "momentum", "wow", "gap", "relevance", "share")
+
+
 def allowed_numbers(obj) -> set[float]:
+    """Every number present in the input: metric values (also as percentages when they are ratios) and
+    numbers quoted inside evidence texts, such as a video title ("5 clients in 30 days")."""
     vals: set[float] = set()
 
-    def walk(x):
+    def walk(x, key=""):
         if isinstance(x, bool):
             return
         if isinstance(x, (int, float)):
             for v in (x, abs(x)):                 # "baja 20%" cites -0.2 without the sign
                 vals.update({float(v), round(float(v), 1), float(round(v))})
-                if v <= 10:                       # ratios also appear as percentages
+                if v <= 10 or any(k in key for k in RATIO_KEYS):   # ratios also appear as percentages
                     vals.update({round(v * 100, 1), float(round(v * 100))})
+        elif isinstance(x, str):
+            vals.update(n for readings in numbers_in(x) for n in readings)
         elif isinstance(x, dict):
-            for v in x.values():
-                walk(v)
+            for k, v in x.items():
+                walk(v, str(k).lower())
         elif isinstance(x, (list, tuple)):
             for v in x:
-                walk(v)
+                walk(v, key)
     walk(obj)
     return vals
 
@@ -126,10 +134,14 @@ def numbers_ok(text: str, allowed: set[float]) -> bool:
 
 
 # --- Proposals ----------------------------------------------------------------
+FORMATS = {"linkedin": {"post", "carousel", "video", "article", "poll", "document"}, "youtube": {"video", "short"}}
+
+
 class ProposalOut(BaseModel):
     opportunity_id: str
     persona: str
-    format: Literal["post", "carousel", "video", "article", "poll", "document"]
+    platform: Literal["linkedin", "youtube"]
+    format: Literal["post", "carousel", "video", "short", "article", "poll", "document"]
     why_now: str
     title_options: list[str]
     hook: str
@@ -142,18 +154,28 @@ class Proposals(BaseModel):
     proposals: list[ProposalOut]
 
 
-PROPOSE_SYSTEM = """You are a senior content strategist writing LinkedIn content proposals for a brand.
+PROPOSE_SYSTEM = """You are a senior content strategist writing social media content proposals for a brand.
 Each proposal must be specific, publishable this week, written in the brand's voice and language, and
 justified only with the metrics and evidence items provided. Every number in why_now must appear in
 the input. evidence may only contain item ids listed for that opportunity. Never claim LinkedIn
-engagement numbers: LinkedIn data is post and author counts only; audience demand comes from YouTube.
+engagement numbers: LinkedIn data is post and author counts only; audience numbers come from YouTube.
 Write why_now for a marketer: express growth as percentages (0.85 -> "85%"), outliers as "4.1x lo
-normal del canal", and never name internal metrics such as li_gap, outlier or demand_momentum."""
+normal del canal", and never name internal metrics such as li_gap, signal, outlier or demand_momentum."""
+
+PLATFORM_GUIDE = {
+    "linkedin": 'LinkedIn: format post, carousel, video, article, poll or document; length like "8 slides" or "250 words".',
+    "youtube": 'YouTube: format video (long form) or short (under 60 s); length like "8-10 min" or "45 s"; '
+               "the hook is the first spoken line, and the outline is the script beats.",
+}
 
 
 def propose(llm, identity: BrandIdentity, voice: str | None, opps: list[dict], patterns: list[dict],
-            main_lang: str, feedback: str = "") -> dict[str, ProposalOut]:
+            main_lang: str, platforms: list[str], feedback: str = "") -> dict[str, ProposalOut]:
     personas = [{"id": p.id, "name": p.name, "description": p.description} for p in identity.personas]
+    choice = ("Use platform " + platforms[0] + " for every proposal." if len(platforms) == 1 else
+              "Choose the platform per opportunity among " + " and ".join(platforms)
+              + ": LinkedIn for professional angles and gaps in what is posted there, YouTube when the "
+              "evidence shows the audience rewards videos on the topic.")
     prompt = f"""Brand: {identity.brand_name}. {identity.description}
 Voice: {voice or "not available; write clearly and practically"}
 Language: {main_lang}
@@ -163,14 +185,16 @@ Winning patterns: {json.dumps(patterns, ensure_ascii=False)}
 Opportunities:
 {json.dumps(opps, ensure_ascii=False, indent=1)}
 {feedback}
-Return one proposal per opportunity id: persona (one of the persona ids), LinkedIn format, why_now
-(1-2 sentences with numbers from the input), 3 title_options, the hook (first line), an outline of 4-8
-points, the length (e.g. "8 slides", "250 words"), and evidence (2-4 item ids from that opportunity)."""
+{choice}
+{chr(10).join(PLATFORM_GUIDE[p] for p in platforms)}
+Return one proposal per opportunity id: persona (one of the persona ids), platform, format, why_now
+(1-2 sentences with numbers from the input), 3 title_options, the hook, an outline of 4-8 points, the
+length, and evidence (2-4 item ids from that opportunity)."""
     res = llm.top(PROPOSE_SYSTEM, prompt, Proposals, effort="high", max_tokens=32000)
     return {p.opportunity_id: p for p in res.proposals}
 
 
-def validate(p: ProposalOut, opp: dict, persona_ids: set[str]) -> str | None:
+def validate(p: ProposalOut, opp: dict, persona_ids: set[str], platforms: list[str]) -> str | None:
     """None when valid, else the reason."""
     allowed_ids = {e["item_id"] for e in opp["evidence_items"]}
     bad = [e for e in p.evidence if e not in allowed_ids]
@@ -178,6 +202,10 @@ def validate(p: ProposalOut, opp: dict, persona_ids: set[str]) -> str | None:
         return f"evidence ids not allowed or missing: {bad}"
     if p.persona not in persona_ids:
         return f"unknown persona {p.persona}"
+    if p.platform not in platforms:
+        return f"platform {p.platform} was not selected; use one of {platforms}"
+    if p.format not in FORMATS[p.platform]:
+        return f"format {p.format} is not valid for {p.platform}; use one of {sorted(FORMATS[p.platform])}"
     if not numbers_ok(p.why_now, allowed_numbers(opp)):
         return f"why_now has numbers not in the input: {p.why_now}"
     if len(p.title_options) < 3:
@@ -187,32 +215,34 @@ def validate(p: ProposalOut, opp: dict, persona_ids: set[str]) -> str | None:
 
 def build_opportunities(llm, identity, voice, opps: list[dict], patterns: list[dict], main_lang: str,
                         warnings: list[str]) -> list[Opportunity]:
+    platforms = list(identity.output_platforms)
     persona_ids = {p.id for p in identity.personas}
     by_id = {o["id"]: o for o in opps}
-    props = propose(llm, identity, voice, opps, patterns, main_lang)
-    failed = {oid: validate(props[oid], o, persona_ids) if oid in props else "missing"
+    props = propose(llm, identity, voice, opps, patterns, main_lang, platforms)
+    failed = {oid: validate(props[oid], o, persona_ids, platforms) if oid in props else "missing"
               for oid, o in by_id.items()}
     failed = {k: v for k, v in failed.items() if v}
     if failed:
-        retry = propose(llm, identity, voice, [by_id[k] for k in failed], patterns, main_lang,
+        retry = propose(llm, identity, voice, [by_id[k] for k in failed], patterns, main_lang, platforms,
                         feedback="\nFix these problems from your previous attempt:\n"
                                  + "\n".join(f"- {k}: {v}" for k, v in failed.items()))
         for k in list(failed):
-            if k in retry and not validate(retry[k], by_id[k], persona_ids):
+            if k in retry and not validate(retry[k], by_id[k], persona_ids, platforms):
                 props[k] = retry[k]
                 del failed[k]
     for k, reason in failed.items():
-        warnings.append(f"Dropped proposal {k} after one regeneration: {reason}")
+        warnings.append(f"Se descartó la propuesta {k} tras un reintento: {reason}")
     out = []
     for oid, o in by_id.items():
         if oid in failed or oid not in props:
             continue
         p = props[oid]
+        charts = [f"topics.{o['topic_id']}.{name}.timeseries" for name, platform
+                  in (("linkedin", "linkedin"), ("demand", "youtube")) if platform in platforms]
         out.append(Opportunity(
-            id=oid, type=o["type"], topic_id=o["topic_id"], persona=p.persona, platform="linkedin",
+            id=oid, type=o["type"], topic_id=o["topic_id"], persona=p.persona, platform=p.platform,
             format=p.format, score=o["score"], why_now=p.why_now,
             proposal=Proposal(title_options=p.title_options[:3], hook=p.hook, outline=p.outline,
                               length=p.length),
-            evidence=p.evidence,
-            chart_refs=[f"topics.{o['topic_id']}.linkedin.timeseries", f"topics.{o['topic_id']}.demand.timeseries"]))
+            evidence=p.evidence, chart_refs=charts))
     return out
