@@ -1,0 +1,12 @@
+# Producción en EC2 (deploy/aws): la web queda en el puerto 80 del servidor y todos los servicios
+# se reinician solos tras un reinicio de la máquina. Se usa junto a compose.yaml:
+#   docker compose -f compose.yaml -f deploy/aws/compose.prod.yaml up -d --build
+services:
+  db:
+    restart: unless-stopped
+  api:
+    restart: unless-stopped
+  web:
+    restart: unless-stopped
+    ports:
+      - "80:80"
