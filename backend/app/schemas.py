@@ -244,6 +244,17 @@ class CreatorSearchRequest(StrictModel):
         return values
 
 
+class TrendRunRequest(StrictModel):
+    platforms: list[Literal["linkedin", "youtube"]] = Field(default_factory=lambda: ["linkedin", "youtube"], min_length=1, max_length=2,
+                                                            description="Redes que muestra el informe. YouTube siempre se consulta como sensor de demanda.")
+    window_days: int = Field(default=28, ge=7, le=90)
+
+    @field_validator("platforms")
+    @classmethod
+    def unique_platforms(cls, values):
+        return list(dict.fromkeys(values))
+
+
 class BatchCreate(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     mode: Literal["public", "demo"] = "public"

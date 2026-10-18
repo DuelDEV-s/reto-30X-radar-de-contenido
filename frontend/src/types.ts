@@ -272,6 +272,114 @@ export type DiscoveryRunDetail = DiscoveryRunSummary & {
 export type QueryPreview = {
   queries: { query: string; keywords: string; angle: string; topic: string }[];
 };
+// Radar de tendencias LinkedIn + YouTube (backend app/trends).
+export type TrendPlatform = "linkedin" | "youtube";
+export type TrendEngineStatus = {
+  configured: boolean;
+  missing: string[];
+  linkedin_providers: string[];
+  models: { bulk: string; judgment: string; top: string };
+  snapshot_hours: number;
+  run_budget_usd: number;
+};
+export type TrendStage = "emerging" | "growing" | "peak" | "saturated" | "declining" | "insufficient_data";
+export type TrendStatus = "validated" | "hype_risk" | "untested" | "stable";
+export type TrendTopic = {
+  topic_id: string;
+  label: string;
+  entities: string[];
+  maps_to: string[];
+  stage: TrendStage;
+  confidence: number;
+  linkedin: {
+    posts_7d: number;
+    authors_7d: number;
+    growth_wow: number;
+    li_gap: number;
+    trend_status: TrendStatus;
+    timeseries: { week: string; posts: number }[];
+  };
+  demand: {
+    level: "low" | "medium" | "high";
+    momentum_wow: number;
+    median_outlier: number | null;
+    items: number;
+    timeseries: { week: string; attention: number }[];
+  };
+  persona_relevance: Record<string, number>;
+  brand_fit: number;
+  coverage_gap: number;
+  opportunity_score: number;
+  why_it_works: string[];
+  top_items: string[];
+};
+export type TrendItem = {
+  item_id: string;
+  platform: TrendPlatform;
+  url: string;
+  title: string | null;
+  excerpt: string | null;
+  author: string | null;
+  published_at: string | null;
+  format: string;
+  lang: string | null;
+  visibility: "internal" | "public";
+  metrics: { views: number; outlier: number | null; engagement: number; velocity_h: number } | null;
+  visibility_proxy: number | null;
+  hook: string | null;
+  evidence_level: "api" | "search_index";
+};
+export type TrendOpportunity = {
+  id: string;
+  type: "linkedin_gap" | "join_trend" | "early_bet" | "language_arbitrage" | "audience_ask";
+  topic_id: string;
+  persona: string;
+  platform: TrendPlatform;
+  format: string;
+  score: number;
+  why_now: string;
+  proposal: { title_options: string[]; hook: string; outline: string[]; length: string };
+  evidence: string[];
+};
+export type TrendReport = {
+  run: {
+    run_id: string;
+    generated_at: string;
+    window: { from: string; to: string };
+    output_platforms: TrendPlatform[];
+    sources: {
+      youtube: { items: number; creators: number; quota_used: number; visibility: string };
+      linkedin: { items: number; providers: string[] };
+    };
+    cost_usd: { search: number; llm: number };
+  };
+  brand: { coverage_source: string | null; coverage_topics: string[]; voice: string | null; languages: string[]; regions: string[] };
+  topics: TrendTopic[];
+  items: TrendItem[];
+  patterns: { pattern: string; label: string; evidence: "youtube_lift" | "linkedin_usage"; lift: number | null; support: number; examples: string[] }[];
+  audience_voice: { theme: string; mentions: number; type: "question" | "objection" | "request"; topic_id: string | null }[];
+  opportunities: TrendOpportunity[];
+  data_quality: { coverage_level: string; warnings: string[] };
+};
+export type TrendRunSummary = {
+  id: string;
+  brand_id: string;
+  status: "queued" | "running" | "done" | "failed";
+  stage: string;
+  platforms: TrendPlatform[];
+  window_days: number;
+  batch_id: string | null;
+  cost: { search: number; llm: number; youtube_units: number } | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  totals: { topics: number; opportunities: number } | null;
+};
+export type TrendRunDetail = TrendRunSummary & {
+  identity: { personas: { id: string; name: string }[] };
+  report: TrendReport | null;
+};
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...options,

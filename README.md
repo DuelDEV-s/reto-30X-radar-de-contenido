@@ -6,6 +6,8 @@ Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integrac
 
 **Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consulta Bright Data primero y Meta/YouTube oficiales como respaldo y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de Bright Data y respaldos](docs/bright-data.md). Sin credenciales se muestran los requisitos, sin inventar datos. Con observaciones ya guardadas, **Reinterpretar datos guardados** genera una propuesta específica sin nuevas consultas ni créditos de extracción.
 
+**Descubrimiento por red:** en **Descubrimiento** se elige la red. Instagram busca creadores por tópico; LinkedIn y YouTube (solos o combinados) ejecutan el radar de tendencias, que cruza la demanda real de YouTube con lo que se publica en LinkedIn y entrega propuestas con evidencia. Solo APIs oficiales. Ver [radar de tendencias LinkedIn + YouTube](docs/trend-radar.md).
+
 ## Arranque con Docker
 
 Requiere Docker Desktop con el motor Linux activo y Docker Compose v2. Desde la raíz:
@@ -54,10 +56,10 @@ La base usa la imagen oficial de PostgreSQL; los Dockerfiles propios están en `
 | Paso | Implementado | Punto de extensión |
 | --- | --- | --- |
 | 1 · Identidad | Nombre y perfiles, Bright Data configurable con Meta/YouTube de respaldo, JSON de análisis, síntesis breve, pilares con evidencia, audiencias por validar y revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
-| 2 · Descubrimiento | Contrato v1, validación, procedencia, separación demo/público, idempotencia de lotes | Equipo del paso 2: entregar `BatchCreate` a `POST /api/brands/{id}/trend-batches` |
+| 2 · Descubrimiento | Contrato v1, validación, procedencia, separación demo/público, idempotencia de lotes. Instagram: creadores por tópico. LinkedIn + YouTube: radar de tendencias con brecha demanda/oferta y propuestas; exporta los videos como lote v1 | Otras fuentes: entregar `BatchCreate` a `POST /api/brands/{id}/trend-batches`. Radar: `backend/app/trends/` y `backend/app/trend_runs.py` |
 | 3 · Priorización | Score explicable, aceleración por vistas/día, coincidencia de tópicos, pieza principal, historial, hipótesis y adaptación | `backend/app/services.py:analyze`: ampliar evidencia o incorporar explicaciones de un modelo |
 
-**Bright Data es el recolector principal de perfiles Instagram/YouTube**, con sus APIs oficiales como respaldo. No hay llamadas a modelos de IA. Los trabajos asíncronos se guardan en PostgreSQL; consultar su estado reutiliza el trabajo y una nueva extracción se solicita explícitamente. El resultado declara qué fuente se consultó, qué datos faltan y qué textos pueden incorporarse a la identidad. LinkedIn y TikTok aún no tienen conector. Las explicaciones del radar siguen siendo plantillas editoriales. El paso 2 continúa encargado del descubrimiento de tendencias. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
+**Bright Data es el recolector principal de perfiles Instagram/YouTube**, con sus APIs oficiales como respaldo. No hay llamadas a modelos de IA. Los trabajos asíncronos se guardan en PostgreSQL; consultar su estado reutiliza el trabajo y una nueva extracción se solicita explícitamente. El resultado declara qué fuente se consultó, qué datos faltan y qué textos pueden incorporarse a la identidad. Para perfiles, LinkedIn y TikTok aún no tienen conector; LinkedIn sí participa en el descubrimiento de tendencias mediante índices de búsqueda. Las explicaciones del radar del paso 3 siguen siendo plantillas editoriales. El paso 2 continúa encargado del descubrimiento de tendencias. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
 
 El prototipo responde: **“¿Qué tópicos de este lote muestran mayor aceleración observable, cuánto coinciden con mi marca y qué experimento editorial puedo hacer?”** No responde con fiabilidad cuáles son los 10 temas que más crecen en toda una plataforma. No estima saturación ni atribuye causalidad a gancho/formato. La confianza describe cantidad de evidencia, no probabilidad estadística.
 
@@ -105,10 +107,11 @@ Los tests cubren el flujo API, identidad, aislamiento de lotes entre marcas, ded
 
 ```text
 backend/app/        API, modelos, validación, reglas y fixtures
+backend/app/trends/ Motor del radar LinkedIn + YouTube (paso 2)
 backend/migrations/ Migraciones Alembic (base, análisis, trabajos)
 backend/tests/      Pruebas de contrato y cálculo
 frontend/src/       Interfaz React, TypeScript y CSS adaptable
-docs/               Contrato del paso 2, ejemplo y arquitectura
+docs/               Contrato del paso 2, radar de tendencias, ejemplo y arquitectura
 compose.yaml        PostgreSQL + FastAPI + React servido por Nginx
 ```
 

@@ -35,6 +35,17 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_REVIEW_MODEL: ${OPENAI_REVIEW_MODEL:-gpt-6-luna}
       OPENAI_REVIEW_EFFORT: ${OPENAI_REVIEW_EFFORT:-low}
+      # Radar de tendencias LinkedIn + YouTube (app/trends): solo APIs oficiales.
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RADAR_LLM: ${RADAR_LLM:-}
+      RADAR_TOP_MODEL: ${RADAR_TOP_MODEL:-sonnet}
+      RUN_BUDGET_USD: ${RUN_BUDGET_USD:-6}
+      TRENDS_SNAPSHOT_HOURS: ${TRENDS_SNAPSHOT_HOURS:-6}
+      TRENDS_DB_PATH: /data/trends.db
+    volumes:
+      - trends_data:/data
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -55,3 +66,4 @@ services:
         condition: service_healthy
 volumes:
   postgres_data:
+  trends_data:

@@ -191,6 +191,28 @@ class DiscoveryCandidate(Base):
     best_rank: Mapped[int] = mapped_column(Integer)
 
 
+class TrendRun(Base):
+    """Una corrida del radar de tendencias LinkedIn + YouTube (app/trends). Guarda la identidad usada,
+    el avance por etapa, el informe completo y el lote v1 que generó para el paso 3."""
+    __tablename__ = "trend_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id", ondelete="CASCADE"), index=True)
+    # queued, running, done o failed.
+    status: Mapped[str] = mapped_column(String(20))
+    stage: Mapped[str] = mapped_column(String(40), default="queued")
+    platforms: Mapped[list] = mapped_column(JSON)
+    window_days: Mapped[int] = mapped_column(Integer)
+    # Entrada exacta del motor (BrandIdentity), derivada de la identidad de la marca al iniciar.
+    identity: Mapped[dict] = mapped_column(JSON)
+    report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    cost: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 def make_engine(url: str):
     return create_engine(url, connect_args={"check_same_thread": False} if url.startswith("sqlite") else {}, pool_pre_ping=True)
 

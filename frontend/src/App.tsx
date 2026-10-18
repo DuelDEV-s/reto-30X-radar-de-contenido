@@ -33,7 +33,7 @@ import type {
 } from "./types";
 import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
 import RelatedAccountsPanel from "./RelatedAccountsPanel";
-import DiscoveryPanel from "./DiscoveryPanel";
+import DiscoveryWorkspace from "./DiscoveryWorkspace";
 
 const compact = (n: number) =>
   new Intl.NumberFormat("es", {
@@ -376,6 +376,16 @@ export default function App() {
       setNotice("Lote importado y validado. El radar ya puede analizarlo.");
     });
   }
+  async function openBatch(id: string) {
+    await run(async () => {
+      const list = await api<Batch[]>(`/brands/${brand!.id}/trend-batches`);
+      setBatches(list);
+      setBatchBrandId(brand!.id);
+      setBatchId(id);
+      setTab("radar");
+      setNotice("Lote del radar LinkedIn + YouTube cargado en el paso 3.");
+    });
+  }
   const topics =
     report?.topics.filter((t) =>
       t.topic.toLowerCase().includes(search.toLowerCase()),
@@ -514,7 +524,7 @@ export default function App() {
                   : tab === "identity"
                     ? "Primero, entiende tu marca."
                     : tab === "discovery"
-                      ? "Encuentra quién habla de tu tema."
+                      ? "Descubre qué se mueve en tu tema."
                       : "Conecta las señales."}
               </h1>
               <p>
@@ -523,7 +533,7 @@ export default function App() {
                   : tab === "identity"
                     ? "Una identidad clara convierte tendencias en oportunidades relevantes."
                     : tab === "discovery"
-                      ? "Cada paso de la búsqueda, de la query al veredicto, a la vista."
+                      ? "Elige la red: creadores en Instagram o tendencias en LinkedIn y YouTube, con la evidencia a la vista."
                       : "El punto de encuentro con el equipo que descubre contenido público."}
               </p>
             </div>
@@ -613,7 +623,7 @@ export default function App() {
               busy={busy}
             />
           ) : tab === "discovery" ? (
-            <DiscoveryPanel brand={brand} />
+            <DiscoveryWorkspace brand={brand} onOpenBatch={openBatch} />
           ) : tab === "integration" ? (
             <Integration
               brand={brand}
