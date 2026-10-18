@@ -27,7 +27,7 @@ deploy/aws/deploy.sh                             # trae main de GitHub y levanta
 
 Para actualizar después de un merge a `main`, basta con volver a correr `deploy/aws/deploy.sh`. Para cambiar una clave, `secrets.sh` con el archivo nuevo y luego `deploy.sh`.
 
-`secrets.sh` acepta varios archivos (`.env` del equipo y uno propio, por ejemplo). Los valores vacíos se ignoran y las variables solo locales (`DATABASE_URL`, `CORS_ORIGINS`, `POSTGRES_PORT`, `TRENDS_DB_PATH`) no se suben.
+`secrets.sh` acepta varios archivos; cada uno pisa al anterior, por ejemplo `.env.example` (valores no secretos como los dataset IDs), luego los `.env` con claves. Los valores vacíos se ignoran. Nunca se suben `DATABASE_URL`, `CORS_ORIGINS`, `TRENDS_DB_PATH` ni `POSTGRES_*`: la base de datos la gestiona el despliegue (usuario y base `radar`, contraseña generada) y Compose arma `DATABASE_URL` con esos valores. PostgreSQL conserva los datos con los que se creó, así que cambiarlos después dejaría a la API sin acceso.
 
 ## Operación
 
