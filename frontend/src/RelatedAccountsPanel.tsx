@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowUpRight, BadgeCheck, LoaderCircle, Users } from "lucide-react";
 import { api } from "./types";
-import type { Brand, RelatedAccount, RelatedAccounts } from "./types";
+import type { AccountVerdict, Brand, RelatedAccount, RelatedAccounts } from "./types";
 
 const PENDING = new Set([
   "reels_requesting",
@@ -19,6 +19,14 @@ const relationLabels: Record<RelatedAccount["relations"][number], string> = {
   coauthor: "Coautor",
   tagged: "Etiquetado",
   posted: "Publicó colaboración",
+};
+const typeLabels: Record<AccountVerdict["account_type"], string> = {
+  creador: "Creador",
+  empresa_afin: "Empresa afín",
+  promocion_comercial: "Promoción / comercial",
+  gobierno_institucion: "Gobierno / institución",
+  medio: "Medio",
+  otro: "Otro",
 };
 const compact = (n: number | null) =>
   n === null
@@ -75,6 +83,23 @@ function AccountCard({ account }: { account: RelatedAccount }) {
         </>
       ) : (
         <p className="muted">Bright Data no devolvió la ficha de este perfil.</p>
+      )}
+      {account.review ? (
+        <div className={`related-account-verdict ${account.review.is_internal ? "internal" : ""}`}>
+          <strong>
+            {typeLabels[account.review.account_type]} · relevancia {account.review.relevance}
+            {account.review.is_internal && " · cuenta interna de la marca"}
+          </strong>
+          <span>{account.review.reason}</span>
+        </div>
+      ) : (
+        <div className="related-account-verdict pending">
+          <span>
+            {account.review_status === "no_profile"
+              ? "Sin ficha de perfil: no se puede revisar."
+              : "Pendiente de revisión con el LLM."}
+          </span>
+        </div>
       )}
       <small>
         Aparece en {account.reel_urls.length}{" "}

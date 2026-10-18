@@ -170,6 +170,24 @@ export type RelatedAccount = {
   profile_available: boolean;
   avatar_url: string | null;
   collected_at: string;
+  fetch_status: string | null;
+  review: AccountVerdict | null;
+  review_status: "reviewed" | "pending" | "no_profile";
+};
+export type AccountVerdict = {
+  relevance: "alta" | "media" | "baja" | "ninguna";
+  account_type:
+    | "creador"
+    | "empresa_afin"
+    | "promocion_comercial"
+    | "gobierno_institucion"
+    | "medio"
+    | "otro";
+  is_internal: boolean;
+  reason: string;
+  model: string;
+  effort: string;
+  reviewed_at: string;
 };
 export type RelatedAccounts = {
   state:
@@ -186,6 +204,73 @@ export type RelatedAccounts = {
   requested_at: string | null;
   updated_at: string | null;
   accounts: RelatedAccount[];
+};
+export type DiscoveryHit = {
+  rank: number;
+  link: string;
+  outcome: "candidate" | "discarded" | "unresolved";
+  username: string | null;
+  author_source: "url" | "snippet" | "oembed" | null;
+  reason: string | null;
+};
+export type DiscoveryQueryRun = {
+  position: number;
+  query: string;
+  planned_query: string;
+  angle: string;
+  topic: string;
+  gl: string | null;
+  fallback_used: boolean;
+  results: number;
+  error: string | null;
+  hits: DiscoveryHit[];
+};
+export type DiscoveryCandidate = Omit<
+  RelatedAccount,
+  "relations" | "reel_urls" | "collected_at" | "review_status"
+> & {
+  review_status:
+    | "reviewed"
+    | "pending"
+    | "no_profile"
+    | "awaiting_profile"
+    | "not_requested";
+  included: boolean;
+  query_hits: number;
+  best_rank: number;
+  sources: { query: string; link: string; rank: number; author_source: string }[];
+};
+export type DiscoveryRunSummary = {
+  id: string;
+  brand_id: string;
+  status: "completed" | "partial" | "failed";
+  created_at: string;
+  topic: string | null;
+  countries: string[];
+  max_queries: number;
+  totals: {
+    queries: number;
+    results: number;
+    candidates: number;
+    discarded: number;
+    unresolved: number;
+  };
+  profiles: {
+    state: "not_started" | "requesting" | "pending" | "ready" | "failed" | "unknown";
+    message: string;
+    requested: number;
+    updated_at: string | null;
+  };
+};
+export type DiscoveryRunDetail = DiscoveryRunSummary & {
+  identity: Identity;
+  review_enabled: boolean;
+  review_summary: { included: number; internal: number; excluded: number; pending: number };
+  queries: DiscoveryQueryRun[];
+  candidates: DiscoveryCandidate[];
+};
+export type QueryPreview = {
+  queries: { query: string; keywords: string; angle: string; topic: string }[];
 };
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {

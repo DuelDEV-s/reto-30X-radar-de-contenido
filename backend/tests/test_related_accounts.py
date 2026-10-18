@@ -4,9 +4,10 @@ from datetime import timedelta
 import httpx
 import pytest
 
-from app.database import RelatedAccountRun
+from app.account_store import account_fields, profile_username
+from app.database import InstagramAccount, RelatedAccountRun
 from app.main import app, get_bright_data_client, get_session
-from app.related_accounts import MAX_ACCOUNTS, account_fields, extract_relations, profile_username
+from app.related_accounts import MAX_ACCOUNTS, extract_relations
 
 # Forma real de los reels de @crece30x devueltos por Bright Data (2026-10), reducida.
 REELS = [
@@ -48,20 +49,24 @@ class FakeBrightData:
     """Simula los dos trabajos de Bright Data y el CDN de las fotos."""
 
     def __init__(self):
-        self.triggers, self.ready = [], set()
+        self.triggers, self.ready, self.kinds = [], set(), {}
 
     def __call__(self, request: httpx.Request):
         path = request.url.path
         if request.url.host == "cdn.example.com":
             return httpx.Response(200, content=b"JPEGDATA", headers={"content-type": "image/jpeg"})
         if path.endswith("/trigger"):
-            self.triggers.append((dict(request.url.params), json.loads(request.content)))
-            return httpx.Response(200, json={"snapshot_id": f"sd_{len(self.triggers)}"})
+            params = dict(request.url.params)
+            self.triggers.append((params, json.loads(request.content)))
+            snapshot = f"sd_{len(self.triggers)}"
+            self.kinds[snapshot] = "reels" if params.get("type") == "discover_new" else "profiles"
+            return httpx.Response(200, json={"snapshot_id": snapshot})
         if "/progress/" in path:
             snapshot = path.rsplit("/", 1)[-1]
             return httpx.Response(200, json={"status": "ready" if snapshot in self.ready else "running"})
         if "/snapshot/" in path:
-            return httpx.Response(200, json=REELS if path.endswith("sd_1") else [PROFILE, {"input": {"url": "https://www.instagram.com/dbilbaoc"}, "error": "not_found"}])
+            kind = self.kinds[path.rsplit("/", 1)[-1]]
+            return httpx.Response(200, json=REELS if kind == "reels" else [PROFILE, {"input": {"url": "https://www.instagram.com/dbilbaoc"}, "error": "not_found"}])
         return httpx.Response(404)
 
 
@@ -104,17 +109,21 @@ def test_full_flow_reels_then_profiles_then_avatar(client, bright):
 
     fake.ready.add("sd_2")
     done = client.get(f"/api/brands/{brand_id}/related-accounts").json()
-    assert done["state"] == "ready" and "3 cuentas relacionadas; 1 con ficha" in done["message"]
+    assert done["state"] == "ready" and "3 cuentas relacionadas; 1 perfiles nuevos" in done["message"]
     andres, *others = done["accounts"]
     assert andres["username"] == "andresbilbao" and andres["followers"] == 1021224 and andres["profile_available"]
     assert andres["relations"] == ["tagged", "posted"] and len(andres["reel_urls"]) == 2
-    assert andres["avatar_url"] == f"/api/brands/{brand_id}/related-accounts/andresbilbao/avatar"
+    assert andres["avatar_url"] == "/api/instagram-accounts/andresbilbao/avatar" and andres["fetch_status"] == "ok"
     assert {a["username"] for a in others} == {"dbilbaoc", "dylanrosemberg"}
     assert all(not a["profile_available"] and a["avatar_url"] is None and a["followers"] is None for a in others)
+    # Las cuentas sin ficha también se recuerdan, para no volver a pagarlas durante la vigencia.
+    assert {a["fetch_status"] for a in others} == {"not_found", "error"}
 
     avatar = client.get(andres["avatar_url"])
     assert avatar.status_code == 200 and avatar.content == b"JPEGDATA" and avatar.headers["content-type"] == "image/jpeg"
-    assert client.get(f"/api/brands/{brand_id}/related-accounts/dbilbaoc/avatar").status_code == 404
+    assert client.get("/api/instagram-accounts/dbilbaoc/avatar").status_code == 404
+    assert client.get("/api/instagram-accounts/andresbilbao").json()["full_name"] == "Andrés Bilbao"
+    assert client.get("/api/instagram-accounts/nadie").status_code == 404
     assert len(fake.triggers) == 2
 
 
@@ -169,3 +178,38 @@ def test_late_poll_still_collects_a_finished_job(client, bright):
     fake.ready.add("sd_1")
     late = client.get(f"/api/brands/{brand_id}/related-accounts").json()
     assert late["state"] == "profiles_pending" and len(fake.triggers) == 2
+
+
+def test_second_search_reuses_stored_profiles(client, bright):
+    brand_id, fake = bright
+    client.post(f"/api/brands/{brand_id}/related-accounts")
+    fake.ready.update({"sd_1", "sd_2"})
+    client.get(f"/api/brands/{brand_id}/related-accounts")
+    assert client.get(f"/api/brands/{brand_id}/related-accounts").json()["state"] == "ready"
+    assert len(fake.triggers) == 2
+
+    # Nueva búsqueda: los reels se piden de nuevo, pero las 3 cuentas ya están guardadas y vigentes.
+    again = client.post(f"/api/brands/{brand_id}/related-accounts").json()
+    assert again["state"] == "reels_pending" and len(fake.triggers) == 3
+    fake.ready.add("sd_3")
+    done = client.get(f"/api/brands/{brand_id}/related-accounts").json()
+    assert done["state"] == "ready" and "ya estaban guardados" in done["message"]
+    assert len(fake.triggers) == 3  # no se lanzó un trabajo de perfiles
+    assert done["accounts"][0]["followers"] == 1021224
+
+
+def test_expired_profiles_are_requested_again(client, bright):
+    brand_id, fake = bright
+    client.post(f"/api/brands/{brand_id}/related-accounts")
+    fake.ready.update({"sd_1", "sd_2"})
+    client.get(f"/api/brands/{brand_id}/related-accounts")
+    client.get(f"/api/brands/{brand_id}/related-accounts")
+    session = next(app.dependency_overrides[get_session]())
+    andres = session.get(InstagramAccount, "andresbilbao")
+    andres.fetched_at = andres.fetched_at - timedelta(days=31)
+    session.commit()
+    client.post(f"/api/brands/{brand_id}/related-accounts")
+    fake.ready.add("sd_3")
+    client.get(f"/api/brands/{brand_id}/related-accounts")
+    params, body = fake.triggers[-1]
+    assert params["dataset_id"] == "gd_profiles" and body == [{"url": "https://www.instagram.com/andresbilbao"}]

@@ -6,6 +6,7 @@ posterior con datos del perfil.
 """
 import logging
 import re
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 class SearchHit(BaseModel):
     """Resultado de búsqueda de entrada. title y description solo sirven para extraer el usuario."""
     query: str
+    gl: str | None = None
     rank: int
     link: str
     title: str = ""
@@ -33,6 +35,18 @@ class Source(BaseModel):
     query: str
     link: str
     rank: int
+
+
+class HitOutcome(BaseModel):
+    """Qué pasó con un resultado de búsqueda: candidato (y de dónde salió el usuario), descartado o sin autor."""
+    query: str
+    gl: str | None
+    rank: int
+    link: str
+    outcome: Literal["candidate", "discarded", "unresolved"]
+    username: str | None = None
+    author_source: Literal["url", "snippet", "oembed"] | None = None
+    reason: str | None = None
 
 
 class CreatorCandidate(BaseModel):
@@ -74,25 +88,31 @@ def discard_reason(link: str) -> str:
     return "usuario no válido"
 
 
-def collect_candidates(hits: list[SearchHit], resolver: PostResolver | None = None) -> tuple[list[CreatorCandidate], int, list[str]]:
+def collect_candidates(hits: list[SearchHit], resolver: PostResolver | None = None) -> tuple[list[CreatorCandidate], list[HitOutcome]]:
     """Agrupa resultados por usuario. Los posts sin usuario en la SERP se resuelven con `resolver` si se indica.
 
-    Devuelve los candidatos, cuántos resultados se descartaron y los posts que quedaron sin autor.
+    Devuelve los candidatos y el desenlace de cada resultado, en el mismo orden de entrada.
     """
     groups: dict[str, list[SearchHit]] = {}
-    discarded, unresolved = 0, []
+    outcomes = []
     for item in hits:
         username = extract_username(item.link, item.title, item.description)
         reason = None if username else discard_reason(item.link)
-        if not username and resolver and reason.startswith("post/reel"):
+        source = None
+        if username:
+            first = next((p for p in urlsplit(item.link).path.split("/") if p), "").lower()
+            source = "snippet" if first in CONTENT_PATHS else "url"
+        elif resolver and reason.startswith("post/reel"):
             author = resolver.resolve(item.link)
-            username = author.username if author else None
+            if author:
+                username, source = author.username, "oembed"
+        base = {"query": item.query, "gl": item.gl, "rank": item.rank, "link": item.link}
         if not username:
-            discarded += 1
-            if reason.startswith("post/reel"):
-                unresolved.append(item.link)
+            outcome = "unresolved" if reason.startswith("post/reel") else "discarded"
+            outcomes.append(HitOutcome(**base, outcome=outcome, reason=reason))
             logger.info("Descartado (%s): %s | %s | query=%s", reason, item.link, item.title, item.query)
             continue
+        outcomes.append(HitOutcome(**base, outcome="candidate", username=username, author_source=source))
         groups.setdefault(username, []).append(item)
     candidates = []
     for username, items in groups.items():
@@ -102,4 +122,4 @@ def collect_candidates(hits: list[SearchHit], resolver: PostResolver | None = No
             sources=[Source(query=i.query, link=i.link, rank=i.rank) for i in items],
         ))
     candidates.sort(key=lambda c: (-c.query_hits, c.best_rank, c.username))
-    return candidates, discarded, list(dict.fromkeys(unresolved))
+    return candidates, outcomes
