@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { PatternsStep, TrendsStep } from "./TrendsSteps";
 import MediaPreview from "./MediaPreview";
+import DiscoveryContentResults from "./DiscoveryContentResults";
 import { api } from "./types";
 import type {
   Brand,
@@ -282,17 +283,17 @@ export default function DiscoveryPanel({ brand, platform = "instagram", onOpenEd
   }
 
   return (
-    <div className="pipeline">
-      <section className="panel">
+    <div className="pipeline ds-creator-pipeline">
+      <section className="panel ds-query-panel">
         <div className="profile-panel-heading">
           <div>
             <div className="eyebrow">PASO 02 · DESCUBRIMIENTO POR TÓPICO</div>
-            <h2>¿Quién está hablando de este tema?</h2>
+            <h2>Del tema a las piezas que vale la pena estudiar.</h2>
             <p className="muted">
               {tiktok
-                ? "Busca videos de TikTok sobre un tópico, toma a sus autores como candidatos, trae su perfil y decide con un LLM cuáles pasan al análisis de tendencias."
-                : "Busca cuentas de Instagram que publican sobre un tópico, trae su perfil y decide con un LLM cuáles pasan al análisis de tendencias."}{" "}
-              Cada corrida queda guardada.
+                ? "Explora videos de TikTok, identifica creadores afines y compara sus publicaciones con su propio rendimiento habitual."
+                : "Encuentra creadores de Instagram, revisa su afinidad y compara las publicaciones de cada cuenta con su propia base."}{" "}
+              Cada consulta conserva su evidencia.
             </p>
           </div>
           <Search size={22} />
@@ -308,7 +309,7 @@ export default function DiscoveryPanel({ brand, platform = "instagram", onOpenEd
             />
           </label>
           <label>
-            {tiktok ? "Palabras clave" : "Queries"}
+            {tiktok ? "Palabras clave" : "Búsquedas"}
             <input
               type="number"
               min={1}
@@ -375,7 +376,7 @@ export default function DiscoveryPanel({ brand, platform = "instagram", onOpenEd
             {step === 3 && <CandidatesStep run={run} />}
             {step === 4 && <ProfilesStep run={run} busy={busy === "profiles"} onFetch={fetchProfiles} />}
             {step === 5 && <ReviewStep run={run} />}
-            {step === 6 && <PostsStep run={run} data={posts} busy={busy === "posts"} onFetch={fetchPosts} />}
+            {step === 6 && <PostsStep key={run.id} run={run} data={posts} busy={busy === "posts"} onFetch={fetchPosts} />}
             {step === 7 && <TrendsStep data={trends} />}
             {step === 8 && run.platform !== "tiktok" && <PatternsStep data={patterns} />}
           </section>
@@ -441,7 +442,7 @@ function Stepper({ run, step, onStep }: { run: DiscoveryRunDetail; step: Step; o
     <ol className="pipeline-steps">
       {items.map(({ n, icon: Icon, title, value, note, state }) => (
         <li key={n}>
-          <button className={`${state} ${step === n ? "selected" : ""}`} onClick={() => onStep(n)}>
+          <button className={`${state} ${step === n ? "selected" : ""}`} aria-current={step===n ? "step" : undefined} onClick={() => onStep(n)}>
             <span className="pipeline-step-icon">
               {state === "active" ? <LoaderCircle size={16} className="spin" /> : state === "warn" ? <CircleAlert size={16} /> : state === "done" ? <Check size={16} /> : <Icon size={16} />}
             </span>
@@ -720,18 +721,14 @@ const number = (n: number | null) => (n === null ? "—" : new Intl.NumberFormat
 const percent = (n: number | null) => (n === null ? "—" : `${(n * 100).toFixed(n < 0.01 ? 2 : 1)}%`);
 const age = (hours: number) => (hours < 48 ? `${Math.round(hours)} h` : `${Math.round(hours / 24)} d`);
 
-function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data: RunPosts | null; busy: boolean; onFetch: () => void }) {
+export function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data: RunPosts | null; busy: boolean; onFetch: () => void }) {
   const [creator, setCreator] = useState("");
   const state = run.posts.state;
-  const [onlyTopic, setOnlyTopic] = useState(true);
-  const items = (data?.items || []).filter((p) => !creator || p.username === creator);
-  // Sin veredicto todavía, el post se muestra: se mueve a "fuera del tópico" solo si la revisión lo descarta.
-  const offTopic = items.filter((p) => p.topic_review && !p.topic_review.on_topic);
-  const shown = onlyTopic ? items.filter((p) => !p.topic_review || p.topic_review.on_topic) : items;
   const tiktok = run.platform === "tiktok";
   return (
     <>
-      <h3>6 · Posts y relevancia</h3>
+      <div className="ds-section-heading"><div><span className="eyebrow">06 · CONTENIDO Y RELEVANCIA</span><h3>Las piezas detrás de la señal.</h3><p>Rendimiento, contexto y referencias de «{data?.topic||run.topic||"los temas de tu marca"}».</p></div><Clapperboard size={26}/></div>
+      <details className="ds-method"><summary>Cómo se calcula el rendimiento</summary>
       <p className="muted">
         Trae los {tiktok ? "videos" : "posts"} de los últimos {data?.window_days ?? 30} días (máx. {data?.posts_per_creator ?? 30} por creador) de
         las cuentas que pasan la revisión. Cada {tiktok ? "video" : "post"} se compara con lo que ese mismo creador consigue normalmente:
@@ -739,6 +736,7 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
           ? " vistas, likes, compartidos y comentarios proyectados según la edad del video, frente a la mediana de sus otros videos. Las vistas pesan más: miden el alcance."
           : " likes y comentarios proyectados según la edad del post, frente a la mediana de sus otros posts del mismo formato. Bright Data no entrega vistas."}
       </p>
+      </details>
       <div className="analysis-stamp">
         <span>
           {ACTIVE.has(state) && <LoaderCircle size={12} className="spin" />} {profileStates[state]}
@@ -776,7 +774,9 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
           {data.excluded_small.map((c) => `@${c.username} (${compact(c.followers)})`).join(", ")}.
         </p>
       )}
+      {!!data?.items.length && <DiscoveryContentResults key={data.id} data={data} creator={creator} onCreator={setCreator} renderTable={items=><PostTable items={items} tiktok={tiktok}/>}/>}
       {!!data?.creators.length && (
+        <details className="ds-baselines"><summary>Líneas base de los creadores · {data.creators.length} cuentas</summary><p className="muted">Abre una cuenta para filtrar las piezas de la galería.</p><div className="pipeline-table-wrap">
         <table className="pipeline-table">
           <thead>
             <tr>
@@ -810,24 +810,9 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
             ))}
           </tbody>
         </table>
+        </div></details>
       )}
-      {!!items.length && (
-        <>
-          <h4 className="pipeline-group">
-            Posts por rendimiento {creator ? `de @${creator}` : ""} ({shown.length})
-          </h4>
-          <label className="post-filter">
-            <input type="checkbox" checked={onlyTopic} onChange={(e) => setOnlyTopic(e.target.checked)} /> Solo sobre el tópico
-          </label>
-          <PostTable items={shown} tiktok={tiktok} />
-          {onlyTopic && !!offTopic.length && (
-            <details className="post-off-topic">
-              <summary>Fuera del tópico ({offTopic.length}): no cuentan para tendencias</summary>
-              <PostTable items={offTopic} tiktok={tiktok} />
-            </details>
-          )}
-        </>
-      )}
+      {!data && state!=="not_started" && <div className="ds-skeleton" role="status">Cargando publicaciones y métricas guardadas…</div>}
       {data && state === "ready" && !data.items.length && <p className="muted">Los creadores no publicaron en la ventana.</p>}
     </>
   );
@@ -857,7 +842,7 @@ function PostTable({ items, tiktok = false }: { items: RunPosts["items"]; tiktok
                       </div>
                     )}
                     {p.caption && <p>{p.caption.slice(0, 140)}{p.caption.length > 140 ? "…" : ""}</p>}
-                    <MediaPreview key={p.url} url={p.url} title={p.caption || p.shortcode} compact />
+                    <MediaPreview key={p.url} url={p.url} title={p.caption || p.shortcode} thumbnailUrl={p.thumbnail_url} compact />
                     {p.transcript && (
                       <details className="post-transcript">
                         <summary>Transcripción ({p.transcript_seconds ?? "—"} s)</summary>

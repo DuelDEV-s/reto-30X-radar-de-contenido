@@ -19,7 +19,7 @@ const NETWORKS: {
     label: "Instagram",
     mark: "IG",
     engine: "Creadores",
-    note: "Cuentas que publican sobre el tópico · SERP + revisión LLM",
+    note: "Creadores y publicaciones afines a tus temas",
     available: true,
   },
   {
@@ -27,7 +27,7 @@ const NETWORKS: {
     label: "LinkedIn",
     mark: "in",
     engine: "Radar de tendencias",
-    note: "Qué se publica y dónde hay hueco · Exa + Claude",
+    note: "Conversaciones y espacio para aportar una perspectiva",
     available: true,
   },
   {
@@ -35,7 +35,7 @@ const NETWORKS: {
     label: "YouTube",
     mark: "YT",
     engine: "Radar de tendencias",
-    note: "Qué premia la audiencia · YouTube Data API",
+    note: "Videos, atención y rendimiento frente a cada canal",
     available: true,
   },
   {
@@ -43,7 +43,7 @@ const NETWORKS: {
     label: "TikTok",
     mark: "TT",
     engine: "Creadores",
-    note: "Videos por palabra clave · Bright Data + revisión LLM",
+    note: "Videos por tema y creadores que vale la pena estudiar",
     available: true,
   },
 ];
@@ -97,7 +97,7 @@ export default function DiscoveryWorkspace({
     (n): n is TrendPlatform => n === "linkedin" || n === "youtube",
   );
   return (
-    <div className="discovery-workspace">
+    <div className="discovery-workspace ds-workspace">
       <section
         className="network-picker"
         aria-label="Red social para descubrir"

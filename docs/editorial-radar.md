@@ -39,7 +39,11 @@ Los gráficos usan Recharts/SVG; los valores temporales tienen una tabla alterna
 
 ## Previews
 
-No se descarga ni se almacena video para estas previews. Se construyen URLs de reproductores a partir de hosts e identificadores públicos admitidos; no se inserta HTML del proveedor. Antes de pulsar **Ver la pieza** no se carga ningún iframe de terceros.
+No se descarga ni se almacena video para estas previews. Se construyen URLs de reproductores a partir de hosts e identificadores públicos admitidos; no se inserta HTML del proveedor.
+
+La tarjeta muestra una miniatura al entrar en pantalla: YouTube usa su imagen pública por ID; Instagram/TikTok reutilizan las URLs de portada presentes en los registros ya guardados por el paso 2. Solo se aceptan imágenes HTTPS en CDNs admitidos por red, sin credenciales o puertos especiales, y la imagen no envía el referrer. No se consulta otro scraper para conseguir una portada.
+
+Si falta la imagen o ya venció, se carga el reproductor oficial con `loading="lazy"` y autoplay desactivado, sin el botón intermedio «Ver la pieza». Cuando existe imagen, el reproductor se monta al pulsarla y puede cerrarse para volver a la miniatura. Los navegadores consultan la imagen o el reproductor al entrar en la zona visible, sin iniciar trabajos de proveedores ni reproducir video automáticamente.
 
 - YouTube: reproductor `youtube-nocookie.com` para video o short con ID válido. [Documentación oficial](https://developers.google.com/youtube/player_parameters).
 - TikTok: reproductor oficial `tiktok.com/player/v1/{id}`. [Documentación oficial](https://developers.tiktok.com/doc/embed-player).

@@ -20,7 +20,7 @@ DATASET_DEFAULTS = {"tiktok": "gd_l1villgoiiidt09ci", "linkedin": "gd_l1vikfnt1w
 OUTPUT_FIELDS = {
     "instagram": "url|profile_url|account|biography|followers|posts_count|is_private|posts",
     "youtube": "url|name|Description|subscribers|videos_count|views|top_videos",
-    "tiktok": "url|account_id|nickname|biography|signature|followers|videos_count|is_private",
+    "tiktok": "url|account_id|nickname|biography|signature|followers|following|likes|videos_count|is_verified|is_private",
     "linkedin": "url|name|about|description|slogan|specialties|industries|followers",
 }
 
@@ -162,6 +162,8 @@ def normalize(records, profile, job):
                              message="Perfil público de la marca obtenido con Bright Data.", observed_at=datetime.now(timezone.utc),
                              title=clean_text(record.get("nickname") if tiktok else record.get("name"), 300), description=clean_text(description),
                              metrics=metrics, usable_for_identity=True, supplied_description=clean_text(profile.description),
+                             account_details=({"likes_total": number(record.get("likes")), "following": number(record.get("following")),
+                                               "is_verified": record.get("is_verified") if isinstance(record.get("is_verified"), bool) else None} if tiktok else {}),
                              metrics_notes=["Se conserva información pública de la cuenta de marca. No se recolectan empleados, contactos ni datos personales.",
                                             "Las vistas acumuladas del perfil no están disponibles; los likes de TikTok no se sustituyen por vistas. No se inicia otro scraper para obtener publicaciones."],
                              collection=collection_info({**job, "state": "ready"}))

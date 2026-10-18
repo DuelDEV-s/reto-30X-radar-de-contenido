@@ -168,7 +168,10 @@ async def inspect_one(profile, client, store=None, budget=None, refresh_bright_d
                 cached = {"url": canonical, "is_private": False, "nickname": account.nickname or raw.get("nickname"),
                           "biography": account.biography or raw.get("biography") or raw.get("signature"),
                           "followers": account.followers if account.followers is not None else raw.get("followers"),
-                          "videos_count": account.videos_count if account.videos_count is not None else raw.get("videos_count")}
+                          "videos_count": account.videos_count if account.videos_count is not None else raw.get("videos_count"),
+                          "likes": account.likes_total if account.likes_total is not None else raw.get("likes"),
+                          "following": account.following if account.following is not None else raw.get("following"),
+                          "is_verified": account.is_verified if account.is_verified is not None else raw.get("is_verified")}
                 value = brightdata.normalize([cached], profile, {"state": "ready", "snapshot_id": None, "created_at": tiktok_accounts.aware(account.fetched_at)})
                 value.observed_at = tiktok_accounts.aware(account.fetched_at)
                 value.collection = None

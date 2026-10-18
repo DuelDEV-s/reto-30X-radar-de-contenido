@@ -19,6 +19,7 @@ export type Preview = {
   embed_url: string | null;
   platform: string | null;
   orientation: string;
+  thumbnail_url?: string | null;
 };
 export type EditorialEvidence = {
   id: string;

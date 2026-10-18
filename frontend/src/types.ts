@@ -1,4 +1,10 @@
-export type Persona = { role: string; need: string };
+export type Persona = {
+  role: string; need: string; goal?: string; barriers?: string[];
+  content_angles?: string[]; validation_question?: string;
+  basis?: "declared" | "textual" | "exploratory" | "team";
+  evidence?: InterpretationEvidence[];
+};
+export type BrandContext = { description: string; audience: string; topics: string[] };
 export type Identity = {
   summary: string;
   audience: string;
@@ -12,6 +18,9 @@ export type Brand = {
   id: string;
   brief: {
     name: string;
+    description?: string;
+    audience?: string;
+    topics?: string[];
     profiles: { platform: string; url: string; description: string }[];
   };
   identity: Identity;
@@ -42,6 +51,7 @@ export type ProfileResult = {
     snapshot_id: string | null;
     requested_at: string;
   } | null;
+  account_details?: { likes_total?: number | null; following?: number | null; is_verified?: boolean | null };
   title: string;
   description: string;
   supplied_description: string;
@@ -88,10 +98,14 @@ export type ProfileAnalysis = {
       measurement: string;
       evidence: InterpretationEvidence[];
     }[];
-    audience_hypotheses: {
-      role: string;
-      need: string;
-      evidence: InterpretationEvidence[];
+    audience_hypotheses: (Persona & { evidence: InterpretationEvidence[] })[];
+    audience_readiness?: "needs_context" | "exploratory" | "text_supported";
+    missing_context?: string[];
+    next_steps?: { title: string; reason: string; action: string }[];
+    content_snapshot?: {
+      platform: string; sample_size: number; with_views: number; median_views: number | null;
+      formats: string[]; latest_published_at: string | null;
+      top_content: { url: string; title: string; views: number }[];
     }[];
     coverage: Record<string, number>;
     limitations: string[];
@@ -277,6 +291,7 @@ export type PostSignal = {
 export type CreatorPost = {
   shortcode: string;
   url: string;
+  thumbnail_url?: string | null;
   username: string;
   author: string | null;
   content_type: "reel" | "video" | "carousel" | "image" | "unknown";

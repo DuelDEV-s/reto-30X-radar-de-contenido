@@ -30,6 +30,8 @@ import type {
   Point,
   Connector,
   SocialProfile,
+  BrandContext,
+  Persona,
 } from "./types";
 import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
 import RelatedAccountsPanel from "./RelatedAccountsPanel";
@@ -391,6 +393,16 @@ export default function App() {
       );
     });
   }
+  async function saveBrandContext(context: BrandContext) {
+    await run(async () => {
+      const data = await api<Brand>(`/brands/${brand!.id}/context`, {
+        method: "PUT", body: JSON.stringify(context),
+      });
+      setBrand(data);
+      setBrands(items => items.map(item => item.id === data.id ? data : item));
+      setNotice("Contexto guardado y personas propuestas actualizadas. Revisa la evidencia antes de aplicar el borrador.");
+    });
+  }
   async function importBatch(raw: string) {
     await run(async () => {
       const data = await api<{ id: string }>(
@@ -662,6 +674,7 @@ export default function App() {
               onSave={saveIdentity}
               onAnalyze={analyzeProfiles}
               onInterpret={interpretProfiles}
+              onContextSave={saveBrandContext}
               busy={busy}
             />
           ) : tab === "discovery" ? (
@@ -1268,11 +1281,13 @@ function IdentityEditor({
   onSave,
   onAnalyze,
   onInterpret,
+  onContextSave,
   busy,
 }: {
   brand: Brand;
   onSave: (value: Identity) => void;
   onInterpret: (apply: boolean) => void;
+  onContextSave: (context: BrandContext) => void;
   onAnalyze: (
     profiles: SocialProfile[],
     apply: boolean,
@@ -1284,6 +1299,8 @@ function IdentityEditor({
   const [value, setValue] = useState(brand.identity);
   const edit = (key: keyof Identity, v: unknown) =>
     setValue((x) => ({ ...x, [key]: v }));
+  const editPersona = (i: number, key: keyof Persona, text: string | string[]) =>
+    edit("personas", value.personas.map((p, j) => i === j ? { ...p, [key]: text, basis: "team" } : p));
   return (
     <>
       <ProfileAnalysisPanel
@@ -1292,6 +1309,7 @@ function IdentityEditor({
         busy={busy}
         onAnalyze={onAnalyze}
         onInterpret={onInterpret}
+        onContextSave={onContextSave}
       />
       <RelatedAccountsPanel brand={brand} />
       <section className="identity-layout">
@@ -1351,21 +1369,15 @@ function IdentityEditor({
                 required
               />
             </label>
-            <h3>User personas</h3>
+            <h3>User personas de la identidad</h3>
+            <p className="muted">Las tarjetas de arriba son propuestas. «Usar propuesta como borrador» incorpora sus detalles aquí para editarlos y confirmarlos.</p>
             {value.personas.map((p, i) => (
               <div className="persona-edit" key={i}>
                 <label>
                   Rol / segmento
                   <input
                     value={p.role}
-                    onChange={(e) =>
-                      edit(
-                        "personas",
-                        value.personas.map((x, j) =>
-                          i === j ? { ...x, role: e.target.value } : x,
-                        ),
-                      )
-                    }
+                    onChange={(e) => editPersona(i, "role", e.target.value)}
                     required
                     minLength={2}
                     maxLength={120}
@@ -1375,19 +1387,19 @@ function IdentityEditor({
                   Necesidad
                   <textarea
                     value={p.need}
-                    onChange={(e) =>
-                      edit(
-                        "personas",
-                        value.personas.map((x, j) =>
-                          i === j ? { ...x, need: e.target.value } : x,
-                        ),
-                      )
-                    }
+                    onChange={(e) => editPersona(i, "need", e.target.value)}
                     required
                     minLength={5}
                     maxLength={500}
                   />
                 </label>
+                <details className="persona-editor-details">
+                  <summary>Objetivo, barreras e ideas de contenido</summary>
+                  <label>Objetivo del segmento<textarea maxLength={500} value={p.goal || ""} onChange={e => editPersona(i, "goal", e.target.value)} /></label>
+                  <label>Barreras por validar (una por línea)<textarea value={(p.barriers || []).join("\n")} onChange={e => editPersona(i, "barriers", e.target.value.split("\n").slice(0, 5))} /></label>
+                  <label>Ideas de contenido (una por línea)<textarea value={(p.content_angles || []).join("\n")} onChange={e => editPersona(i, "content_angles", e.target.value.split("\n").slice(0, 5))} /></label>
+                  <label>Pregunta para validar<textarea maxLength={500} value={p.validation_question || ""} onChange={e => editPersona(i, "validation_question", e.target.value)} /></label>
+                </details>
                 {value.personas.length > 1 && (
                   <button
                     className="text-button"

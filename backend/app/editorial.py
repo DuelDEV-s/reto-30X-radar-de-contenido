@@ -38,7 +38,7 @@ def evidence(item, platform, *, demo=False):
             "format": item.get("format") or item.get("content_type") or "unknown",
             "views": metrics.get("views", item.get("views")), "performance": item.get("performance", metrics.get("outlier")),
             "evidence_level": item.get("evidence_level", "demo" if demo else "public_snapshot"),
-            "preview": preview(url or "", demo=demo)}
+            "preview": preview(url or "", demo=demo, thumbnail=item.get("thumbnail_url"))}
 
 
 def source_summary(row, kind):
