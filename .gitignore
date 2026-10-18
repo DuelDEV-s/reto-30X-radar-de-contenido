@@ -4,9 +4,12 @@ __pycache__/
 .pytest_cache/
 *.pyc
 *.db
+*.db-wal
+*.db-shm
 node_modules/
 dist/
 *.tsbuildinfo
 *.egg-info/
 work/
 .DS_Store
+.claude/

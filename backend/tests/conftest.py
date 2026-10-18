@@ -12,7 +12,7 @@ from app.main import app
 def no_external_credentials(monkeypatch):
     import os
     for key in list(os.environ):
-        if key.startswith(("BRIGHT_DATA_", "YOUTUBE_", "META_", "OPENAI_")):
+        if key.startswith(("BRIGHT_DATA_", "YOUTUBE_", "META_", "OPENAI_", "EXA_", "BRAVE_", "ANTHROPIC_", "RADAR_", "TRENDS_")):
             monkeypatch.delenv(key, raising=False)
 
 

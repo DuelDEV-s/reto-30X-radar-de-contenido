@@ -2,21 +2,22 @@ import hashlib
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .batches import save_batch
 from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
 from .discovery import discover_creators, geo_targets
 from . import discovery_store
 from .query_builder import QueryContext, build_queries
-from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult
+from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult, TrendRunRequest
 from .post_resolver import OEmbedResolver, PostResolver
 from . import related_accounts
 from . import account_review
@@ -29,10 +30,23 @@ from .profiles import build_analysis, connector_status, TTL
 from datetime import datetime, timezone
 from .collection_jobs import DBJobStore
 from .interpretation import interpret, VERSION as INTERPRETATION_VERSION
+from . import trend_runs
+from .database import TrendRun
+from .trends import config as trends_config
 
 # Uvicorn solo configura sus propios loggers; esto hace visibles los logs INFO de app.* en `docker compose logs api`.
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s:     %(name)s: %(message)s")
-app = FastAPI(title="30X Radar de contenido", version="0.1.0", description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2.")
+# httpx registra la URL completa de cada petición y las de YouTube llevan la API key.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    trend_runs.start_snapshot_scheduler()
+    yield
+
+
+app = FastAPI(title="30X Radar de contenido", version="0.1.0", lifespan=lifespan, description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2. Radar de tendencias LinkedIn + YouTube con APIs oficiales.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
 DB = Annotated[Session, Depends(get_session)]
 
@@ -135,25 +149,6 @@ def save_brand(brief, db):
     db.commit()
     db.refresh(brand)
     return brand
-
-
-def save_batch(brand_id, batch, db):
-    data = batch.model_dump(mode="json")
-    fingerprint = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    previous = db.scalar(select(TrendBatch).where(TrendBatch.brand_id == brand_id, TrendBatch.fingerprint == fingerprint))
-    if previous:
-        return {"id": previous.id, "posts": len(data["posts"]), "deduplicated": True}
-    row = TrendBatch(brand_id=brand_id, fingerprint=fingerprint, data=data)
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        previous = db.scalar(select(TrendBatch).where(TrendBatch.brand_id == brand_id, TrendBatch.fingerprint == fingerprint))
-        if not previous:
-            raise
-        return {"id": previous.id, "posts": len(data["posts"]), "deduplicated": True}
-    return {"id": row.id, "posts": len(data["posts"]), "deduplicated": False}
 
 
 @app.get("/api/health", tags=["system"])
@@ -363,6 +358,44 @@ async def read_run_profiles(run_id: str, db: DB, client: BRIGHT_DATA, reviewer: 
         run = await discovery_store.advance_profiles(db, run, client)
     await review_run(db, run, reviewer)
     return discovery_store.detail(db, run)
+
+
+@app.get("/api/trend-engine", tags=["step-2-trends"])
+def trend_engine_status():
+    """Claves del radar LinkedIn + YouTube configuradas en el servidor y modelos en uso."""
+    missing = trends_config.missing_keys()
+    return {"configured": not missing, "missing": missing,
+            "linkedin_providers": ["exa"] + (["brave"] if os.getenv("BRAVE_API_KEY") else []),
+            "models": {"bulk": trends_config.HAIKU, "judgment": trends_config.judgment_model(), "top": trends_config.top_model()},
+            "snapshot_hours": trends_config.snapshot_hours(), "run_budget_usd": trends_config.run_budget_usd()}
+
+
+@app.post("/api/brands/{brand_id}/trend-runs", status_code=202, tags=["step-2-trends"])
+def start_trend_run(brand_id: str, request: TrendRunRequest, db: DB, background: BackgroundTasks):
+    """Inicia el radar LinkedIn + YouTube con la identidad guardada. Tarda unos minutos: consultar
+    GET /api/trend-runs/{id}. Al terminar, los videos con vistas observadas quedan como lote v1 del paso 3."""
+    brand = get_brand(brand_id, db)
+    try:
+        run = trend_runs.create_run(db, brand, request.platforms, request.window_days)
+    except trend_runs.TrendRunError as error:
+        raise HTTPException(error.status, error.message)
+    background.add_task(trend_runs.execute, run.id)
+    return trend_runs.summary(run)
+
+
+@app.get("/api/brands/{brand_id}/trend-runs", tags=["step-2-trends"])
+def list_trend_runs(brand_id: str, db: DB):
+    get_brand(brand_id, db)
+    return trend_runs.list_runs(db, brand_id)
+
+
+@app.get("/api/trend-runs/{run_id}", tags=["step-2-trends"])
+def read_trend_run(run_id: str, db: DB):
+    """Avance de la corrida y, al terminar, el informe completo (tópicos, brecha, propuestas, evidencia)."""
+    run = db.get(TrendRun, run_id)
+    if not run:
+        raise HTTPException(404, "Corrida no encontrada")
+    return trend_runs.detail(trend_runs.expire_stale(db, run))
 
 
 @app.post("/api/demo", status_code=201, tags=["demo"])
