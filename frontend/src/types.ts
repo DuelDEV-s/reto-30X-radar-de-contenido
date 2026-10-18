@@ -549,6 +549,10 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
     // El navegador solo dice "Failed to fetch": la API no responde (detenida o reiniciándose).
     throw new Error("No hay conexión con la API. Verifica que el backend esté en marcha y vuelve a intentarlo.");
   }
+  // La sesión del PIN expiró o cambió: recargar vuelve a mostrar la pantalla de acceso.
+  if (response.status === 401 && !path.startsWith("/auth/")) {
+    window.location.reload();
+  }
   if (!response.ok) {
     let detail = `Error ${response.status}`;
     try {

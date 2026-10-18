@@ -2645,3 +2645,43 @@ details p {
     grid-column: 2;
   }
 }
+.pin-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.pin-card {
+  width: min(340px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 32px 24px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.pin-card h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.pin-card p {
+  margin: 0;
+  color: var(--muted);
+}
+.pin-card input {
+  width: 100%;
+  text-align: center;
+  font-size: 24px;
+  letter-spacing: 0.4em;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.pin-card button {
+  width: 100%;
+  justify-content: center;
+}
+.pin-error {
+  color: #c0392b;
+}

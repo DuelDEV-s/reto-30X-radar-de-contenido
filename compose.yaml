@@ -20,6 +20,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-radar}:${POSTGRES_PASSWORD:-radar_local_change_me}@db:5432/${POSTGRES_DB:-radar}
       CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      APP_PIN: ${APP_PIN:-}
       BRIGHT_DATA_API_KEY: ${BRIGHT_DATA_API_KEY:-}
       BRIGHT_DATA_SERP_ZONE: ${BRIGHT_DATA_SERP_ZONE:-}
       BRIGHT_DATA_INSTAGRAM_DATASET_ID: ${BRIGHT_DATA_INSTAGRAM_DATASET_ID:-}

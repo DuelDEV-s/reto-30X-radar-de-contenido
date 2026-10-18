@@ -34,7 +34,7 @@ from .profiles import build_analysis, connector_status, TTL
 from datetime import datetime, timezone
 from .collection_jobs import DBJobStore
 from .interpretation import interpret, VERSION as INTERPRETATION_VERSION
-from . import trend_runs
+from . import auth, trend_runs
 from .database import TrendRun
 from .trends import config as trends_config
 
@@ -51,7 +51,10 @@ async def lifespan(app):
 
 
 app = FastAPI(title="30X Radar de contenido", version="0.1.0", lifespan=lifespan, description="Pasos 1 y 3. Perfiles públicos con Bright Data y APIs oficiales de respaldo. Ingesta v1 para el paso 2. Radar de tendencias LinkedIn + YouTube con APIs oficiales.")
-app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type"])
+# Registrado antes que CORS para que las respuestas 401 también lleven sus cabeceras.
+app.middleware("http")(auth.require_pin)
+app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type", "X-App-Pin"], allow_credentials=True)
+app.include_router(auth.router)
 DB = Annotated[Session, Depends(get_session)]
 
 
