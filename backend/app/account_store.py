@@ -112,14 +112,18 @@ async def snapshot_records(client, snapshot: str) -> list | None:
     return records if isinstance(records, list) else [records]
 
 
-async def store_profiles(db: Session, client, records: list, requested: list[str]) -> int:
+async def store_profiles(db: Session, client, records: list, requested: list[str], model=InstagramAccount,
+                         fields=None, username_of=None, avatar_key: str = "profile_image_link") -> int:
     """Guarda las fichas recibidas. Una cuenta pedida sin ficha queda marcada para no volver a pagarla
-    durante la vigencia; si ya tenía una ficha válida, esa ficha se conserva. Devuelve cuántas llegaron."""
+    durante la vigencia; si ya tenía una ficha válida, esa ficha se conserva. Devuelve cuántas llegaron.
+
+    `model`, `fields`, `username_of` y `avatar_key` adaptan el guardado a otra red (TikTok)."""
+    fields, username_of = fields or account_fields, username_of or profile_username
     received, failures = {}, {}
     for record in records:
         if not isinstance(record, dict):
             continue
-        name = profile_username(record)
+        name = username_of(record)
         if name not in requested:
             continue
         code = str(record.get("error_code") or record.get("error") or "").lower()
@@ -128,18 +132,19 @@ async def store_profiles(db: Session, client, records: list, requested: list[str
         else:
             received[name] = record
     for name in requested:
-        account = db.get(InstagramAccount, name)
+        account = db.get(model, name)
         record = received.get(name)
         if record is None:
             if account is None:
-                db.add(InstagramAccount(username=name, fetch_status=failures.get(name, "error"), external_urls=[], fetched_at=now()))
+                db.add(model(username=name, fetch_status=failures.get(name, "error"), external_urls=[], fetched_at=now()))
             continue
-        avatar = await download_avatar(client, record.get("profile_image_link"))
-        values = {**account_fields(record), "raw": record, "fetch_status": "private" if record.get("is_private") else "ok", "fetched_at": now()}
+        avatar = await download_avatar(client, record.get(avatar_key))
+        values = {**fields(record), "raw": record, "fetched_at": now()}
+        values["fetch_status"] = "private" if values.get("is_private") else "ok"
         if avatar or account is None:
             values.update(avatar=avatar[0] if avatar else None, avatar_type=avatar[1] if avatar else None)
         if account is None:
-            db.add(InstagramAccount(username=name, **values))
+            db.add(model(username=name, **values))
         else:
             for key, value in values.items():
                 setattr(account, key, value)
@@ -162,7 +167,7 @@ def account_dict(username: str, account: InstagramAccount | None) -> dict:
     }
 
 
-def accounts_by_username(db: Session, usernames: list[str]) -> dict[str, InstagramAccount]:
+def accounts_by_username(db: Session, usernames: list[str], model=InstagramAccount) -> dict[str, InstagramAccount]:
     if not usernames:
         return {}
-    return {a.username: a for a in db.scalars(select(InstagramAccount).where(InstagramAccount.username.in_(usernames))).all()}
+    return {a.username: a for a in db.scalars(select(model).where(model.username.in_(usernames))).all()}

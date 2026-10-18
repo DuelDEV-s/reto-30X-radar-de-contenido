@@ -140,14 +140,14 @@ def test_failed_analysis_is_left_empty_and_not_retried(db, tmp_path):
 
     assert asyncio.run(run(FakeAnalyzer(fail=True))) == 2
     db.expire_all()
-    assert db.get(PostContentAnalysis, "A1").status == "error" and db.get(PostContentAnalysis, "OLD").status == "expired"
+    assert db.get(PostContentAnalysis, ("instagram", "A1")).status == "error" and db.get(PostContentAnalysis, ("instagram", "OLD")).status == "expired"
     # El fallido queda vacío: otra consulta no lo reintenta.
     fake = FakeAnalyzer()
     assert asyncio.run(run(fake)) == 0 and fake.calls == []
     posts.append(reel(db, "A2", cdn_url("ok")))
     assert asyncio.run(run(fake)) == 1 and len(fake.calls) == 1
     db.expire_all()
-    row = db.get(PostContentAnalysis, "A2")
+    row = db.get(PostContentAnalysis, ("instagram", "A2"))
     assert row.status == "ok" and row.seconds == 10 and row.features["formato"] == "persona_a_camara"
     assert asyncio.run(run(fake)) == 0
     # Con otro modelo, el análisis guardado queda desactualizado y se rehace (el fallido sigue vacío).
@@ -175,4 +175,4 @@ def test_cancelled_request_releases_its_claims(db, tmp_path):
 
     asyncio.run(run())
     db.expire_all()
-    assert [db.get(PostContentAnalysis, c).status for c in ("C1", "C2")] == [None, None]
+    assert [db.get(PostContentAnalysis, ("instagram", c)).status for c in ("C1", "C2")] == [None, None]

@@ -10,7 +10,7 @@ const NETWORKS: { id: Network; label: string; mark: string; engine: string; note
   { id: "instagram", label: "Instagram", mark: "IG", engine: "Creadores", note: "Cuentas que publican sobre el tópico · SERP + revisión LLM", available: true },
   { id: "linkedin", label: "LinkedIn", mark: "in", engine: "Radar de tendencias", note: "Qué se publica y dónde hay hueco · Exa + Claude", available: true },
   { id: "youtube", label: "YouTube", mark: "YT", engine: "Radar de tendencias", note: "Qué premia la audiencia · YouTube Data API", available: true },
-  { id: "tiktok", label: "TikTok", mark: "TT", engine: "Próximamente", note: "Aún sin conector", available: false },
+  { id: "tiktok", label: "TikTok", mark: "TT", engine: "Creadores", note: "Videos por palabra clave · Bright Data + revisión LLM", available: true },
 ];
 const STORAGE_KEY = "radar-discovery-networks";
 
@@ -25,7 +25,7 @@ function initialSelection(): Network[] {
 }
 
 /** Paso 2: elige la red y muestra el mecanismo de descubrimiento que la cubre.
- * Instagram usa la búsqueda de creadores; LinkedIn y YouTube, el radar de tendencias (combinables). */
+ * Instagram y TikTok usan la búsqueda de creadores; LinkedIn y YouTube, el radar de tendencias (combinables). */
 export default function DiscoveryWorkspace({ brand, onOpenBatch }: { brand: Brand; onOpenBatch: (batchId: string) => void }) {
   const [selected, setSelected] = useState<Network[]>(initialSelection);
 
@@ -39,7 +39,8 @@ export default function DiscoveryWorkspace({ brand, onOpenBatch }: { brand: Bran
 
   function toggle(id: Network) {
     setSelected((current) => {
-      if (id === "instagram") return ["instagram"];
+      // Instagram y TikTok usan cada uno su búsqueda de creadores: no se combinan con otras redes.
+      if (id === "instagram" || id === "tiktok") return [id];
       const trends = current.filter((n): n is TrendPlatform => n === "linkedin" || n === "youtube");
       if (trends.includes(id as TrendPlatform)) return trends.length > 1 ? trends.filter((n) => n !== id) : trends;
       return [...trends, id as TrendPlatform];
@@ -54,7 +55,7 @@ export default function DiscoveryWorkspace({ brand, onOpenBatch }: { brand: Bran
           <div className="eyebrow">PASO 02 · ¿DÓNDE BUSCAMOS?</div>
           <p className="muted">
             Cada red corre por separado. LinkedIn + YouTube juntos miden la brecha entre lo que la audiencia consume y
-            lo que se publica. Instagram usa su propia búsqueda de creadores.
+            lo que se publica. Instagram y TikTok usan su propia búsqueda de creadores.
           </p>
         </div>
         <div className="network-options" role="group">
@@ -84,7 +85,7 @@ export default function DiscoveryWorkspace({ brand, onOpenBatch }: { brand: Bran
       {trendPlatforms.length ? (
         <TrendRadarPanel brand={brand} platforms={trendPlatforms} onOpenBatch={onOpenBatch} />
       ) : (
-        <DiscoveryPanel brand={brand} />
+        <DiscoveryPanel brand={brand} platform={selected.includes("tiktok") ? "tiktok" : "instagram"} />
       )}
     </div>
   );

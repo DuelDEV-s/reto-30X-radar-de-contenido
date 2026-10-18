@@ -38,6 +38,10 @@ HOT_TRACTION = 1.5
 CONSOLIDATED_TRACTION = 1.2
 SATURATED_SHARE = 0.12
 MIN_POSTS = 3
+# En TikTok el rendimiento por post es mucho más disperso (las vistas de un viral llegan a ×100–×300 de lo normal):
+# con la misma mediana (~×1), su p75 es ~×3 frente a ~×1,6 en Instagram, unas 2,2 veces más ancho en escala log.
+# Los umbrales de tracción se escalan igual para que "en caliente" signifique lo mismo en ambas redes.
+TRACTION_THRESHOLDS = {"instagram": (HOT_TRACTION, CONSOLIDATED_TRACTION), "tiktok": (2.5, 1.5)}
 MIN_CREATORS_HOT = 2
 COOLING_MOMENTUM = -0.3
 RISING_MOMENTUM = 0.5
@@ -128,25 +132,26 @@ def traction(posts: list[dict], ref: datetime) -> float | None:
     return math.exp(sum(w * math.log(v) for w, v in weights) / total) if total else None
 
 
-def state_of(stats: dict) -> str:
-    if stats["previous_posts"] == 0 and stats["recent_posts"] >= 1 and (stats["traction"] or 0) >= HOT_TRACTION:
+def state_of(stats: dict, platform: str = "instagram") -> str:
+    hot, consolidated = TRACTION_THRESHOLDS[platform]
+    if stats["previous_posts"] == 0 and stats["recent_posts"] >= 1 and (stats["traction"] or 0) >= hot:
         return "emergente"
     if stats["posts"] < MIN_POSTS:
         return "insuficiente"
     if stats["previous_posts"] > 0 and (stats["recent_posts"] == 0 or (stats["momentum"] is not None and stats["momentum"] <= COOLING_MOMENTUM)):
         return "enfriandose"
-    if stats["traction"] >= HOT_TRACTION and stats["recent_creators"] >= MIN_CREATORS_HOT and (stats["momentum"] or 0) >= 0:
+    if stats["traction"] >= hot and stats["recent_creators"] >= MIN_CREATORS_HOT and (stats["momentum"] or 0) >= 0:
         return "en_caliente"
     if (stats["momentum"] or 0) >= RISING_MOMENTUM and stats["traction"] >= 1.0 and stats["recent_creators"] >= MIN_CREATORS_HOT:
         return "en_ascenso"
     if stats["share"] >= SATURATED_SHARE and stats["traction"] < 1.0:
         return "saturado"
-    if stats["traction"] >= CONSOLIDATED_TRACTION:
+    if stats["traction"] >= consolidated:
         return "consolidado"
     return "estable"
 
 
-def analyze(posts: list[dict], topics: list[dict], ref: datetime, window_days: int) -> dict:
+def analyze(posts: list[dict], topics: list[dict], ref: datetime, window_days: int, platform: str = "instagram") -> dict:
     """Métricas por tópico y matriz tópico × semana.
 
     `posts`: dicts con shortcode, username, posted_at, performance (> 0), subtopics, url, caption, content_type,
@@ -187,17 +192,17 @@ def analyze(posts: list[dict], topics: list[dict], ref: datetime, window_days: i
             cells.append({"week": start, "posts": len(inside), "creators": len({p["username"] for p in inside}),
                           "median_performance": round(median(p["performance"] for p in inside), 2) if inside else None})
         top = sorted(members, key=lambda p: -p["performance"])[:3]
-        formats = {kind: sum(p["content_type"] == kind for p in members) for kind in ("reel", "carousel", "image")}
+        formats = {kind: sum(p["content_type"] == kind for p in members) for kind in ("reel", "video", "carousel", "image")}
         results.append({
             "name": topic["name"], "description": topic["description"], "subtopics": topic["labels"],
-            "state": "otros" if topic["name"].lower() == OTHER.lower() else state_of(stats),
+            "state": "otros" if topic["name"].lower() == OTHER.lower() else state_of(stats, platform),
             **{k: (round(v, 2) if isinstance(v, float) else v) for k, v in stats.items()},
             "cells": cells, "formats": formats,
             "evidence": [{k: p[k] for k in ("shortcode", "url", "username", "performance", "label", "content_type", "caption")} for p in top],
         })
     results.sort(key=lambda t: (STATE_ORDER.index(t["state"]), -(t["traction"] or 0)))
     return {"weeks": weeks, "topics": results, "post_count": len(posts), "reference": ref,
-            "method": {"half_life_days": HALF_LIFE_DAYS, "recent_days": RECENT_DAYS, "hot_traction": HOT_TRACTION,
-                       "consolidated_traction": CONSOLIDATED_TRACTION, "saturated_share": SATURATED_SHARE,
+            "method": {"half_life_days": HALF_LIFE_DAYS, "recent_days": RECENT_DAYS, "hot_traction": TRACTION_THRESHOLDS[platform][0],
+                       "consolidated_traction": TRACTION_THRESHOLDS[platform][1], "saturated_share": SATURATED_SHARE,
                        "min_posts": MIN_POSTS, "min_creators_hot": MIN_CREATORS_HOT, "cooling_momentum": COOLING_MOMENTUM,
                        "rising_momentum": RISING_MOMENTUM}}

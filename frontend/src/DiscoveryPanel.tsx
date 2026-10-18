@@ -20,6 +20,7 @@ import { api } from "./types";
 import type {
   Brand,
   DiscoveryCandidate,
+  DiscoveryPlatform,
   DiscoveryQueryRun,
   DiscoveryRunDetail,
   DiscoveryRunSummary,
@@ -41,6 +42,7 @@ const sources: Record<string, string> = {
   url: "URL",
   snippet: "título",
   oembed: "oEmbed",
+  video: "video",
 };
 const types: Record<string, string> = {
   creador: "Creador",
@@ -92,7 +94,7 @@ const siteIgnored = (q: DiscoveryQueryRun) =>
   q.hits.length > 0 && q.hits.every((h) => h.reason === "otro dominio");
 
 function needsPolling(run: DiscoveryRunDetail) {
-  if (ACTIVE.has(run.profiles.state)) return true;
+  if (ACTIVE.has(run.search.state) || ACTIVE.has(run.profiles.state)) return true;
   return (
     run.review_enabled &&
     run.profiles.state === "ready" &&
@@ -102,7 +104,10 @@ function needsPolling(run: DiscoveryRunDetail) {
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
-export default function DiscoveryPanel({ brand }: { brand: Brand }) {
+/** Búsqueda de creadores por tópico. Instagram parte de Google (SERP); TikTok, de una búsqueda de videos por
+ * palabra clave en Bright Data. Desde los candidatos, las etapas son las mismas. */
+export default function DiscoveryPanel({ brand, platform = "instagram" }: { brand: Brand; platform?: DiscoveryPlatform }) {
+  const tiktok = platform === "tiktok";
   const [runs, setRuns] = useState<DiscoveryRunSummary[]>([]);
   const [run, setRun] = useState<DiscoveryRunDetail | null>(null);
   const [runId, setRunId] = useState("");
@@ -117,7 +122,8 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
   const [error, setError] = useState("");
 
   async function loadRuns(select?: string) {
-    const list = await api<DiscoveryRunSummary[]>(`/brands/${brand.id}/discovery-runs`);
+    const all = await api<DiscoveryRunSummary[]>(`/brands/${brand.id}/discovery-runs`);
+    const list = all.filter((r) => r.platform === platform);
     setRuns(list);
     setRunId((current) => select || current || list[0]?.id || "");
   }
@@ -127,7 +133,7 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
     setRunId("");
     setPreview(null);
     loadRuns().catch((e) => setError(String(e.message || e)));
-  }, [brand.id]);
+  }, [brand.id, platform]);
 
   useEffect(() => {
     setPosts(null);
@@ -145,12 +151,15 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
   useEffect(() => {
     if (!polling || !run) return;
     const controller = new AbortController();
-    // El GET avanza los perfiles y revisa por tandas; nunca inicia una extracción nueva.
+    // El GET avanza la búsqueda de TikTok o los perfiles y revisa por tandas; nunca inicia una extracción nueva.
+    const path = ACTIVE.has(run.search.state) ? `/discovery-runs/${run.id}` : `/discovery-runs/${run.id}/profiles`;
     const timer = setInterval(() => {
-      api<DiscoveryRunDetail>(`/discovery-runs/${run.id}/profiles`, { signal: controller.signal })
+      api<DiscoveryRunDetail>(path, { signal: controller.signal })
         .then((data) => {
           setRun(data);
-          setRuns((items) => items.map((r) => (r.id === data.id ? { ...r, profiles: data.profiles } : r)));
+          setRuns((items) =>
+            items.map((r) => (r.id === data.id ? { ...r, status: data.status, totals: data.totals, search: data.search, profiles: data.profiles } : r)),
+          );
         })
         .catch((e) => !controller.signal.aborted && setError(String(e.message || e)));
     }, 8000);
@@ -158,7 +167,7 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
       controller.abort();
       clearInterval(timer);
     };
-  }, [polling, run?.id]);
+  }, [polling, run?.id, run?.search.state]);
 
   // Los posts se cargan al abrir el paso 6; mientras Bright Data trabaja, el GET avanza el trabajo sin iniciar otro.
   const postsActive = !!run && ACTIVE.has(run.posts.state);
@@ -186,19 +195,27 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
   }, [run?.id, step, postsActive, transcribing]);
 
   // Tendencias: se recalculan al abrir el paso (la unificación con el LLM solo corre si cambiaron los subtemas).
+  // Mientras esperan veredictos, se sigue consultando: cada consulta revisa una tanda de posts.
+  const trendsWaiting = !!trends && trends.state === "waiting" && trends.reviews_pending > 0;
   useEffect(() => {
     if (!run || step !== 7) return;
     const controller = new AbortController();
-    api<RunTrends>(`/discovery-runs/${run.id}/trends`, { signal: controller.signal })
-      .then(setTrends)
-      .catch((e) => !controller.signal.aborted && setError(String(e.message || e)));
-    return () => controller.abort();
-  }, [run?.id, step]);
+    const load = () =>
+      api<RunTrends>(`/discovery-runs/${run.id}/trends`, { signal: controller.signal })
+        .then(setTrends)
+        .catch((e) => !controller.signal.aborted && setError(String(e.message || e)));
+    load();
+    const timer = trendsWaiting ? setInterval(load, 8000) : undefined;
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [run?.id, step, trendsWaiting]);
 
   // Patrones: cada consulta analiza una tanda de reels; se sigue consultando mientras queden pendientes.
   const analyzing = !!patterns && patterns.enabled && !patterns.reviews_pending && patterns.progress.pending > 0;
   useEffect(() => {
-    if (!run || step !== 8) return;
+    if (!run || step !== 8 || run.platform === "tiktok") return;
     const controller = new AbortController();
     const load = () =>
       api<RunPatterns>(`/discovery-runs/${run.id}/content-patterns`, { signal: controller.signal })
@@ -228,18 +245,22 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
 
   function previewQueries() {
     return act("preview", async () => {
-      setPreview(await api<QueryPreview>(`/brands/${brand.id}/discovery-queries`, { method: "POST", body: body() }));
+      const request = JSON.stringify({ topic: topic.trim() || null, max_queries: maxQueries, platform });
+      setPreview(await api<QueryPreview>(`/brands/${brand.id}/discovery-queries`, { method: "POST", body: request }));
     });
   }
 
   function runSearch(e: FormEvent) {
     e.preventDefault();
     return act("search", async () => {
-      const result = await api<{ run_id: string }>(`/brands/${brand.id}/creator-search`, { method: "POST", body: body() });
+      // TikTok responde con la corrida recién creada (búsqueda en curso); Instagram, con la búsqueda ya hecha.
+      const id = tiktok
+        ? (await api<DiscoveryRunDetail>(`/brands/${brand.id}/tiktok-search`, { method: "POST", body: body() })).id
+        : (await api<{ run_id: string }>(`/brands/${brand.id}/creator-search`, { method: "POST", body: body() })).run_id;
       setPreview(null);
       setStep(2);
-      await loadRuns(result.run_id);
-      setRunId(result.run_id);
+      await loadRuns(id);
+      setRunId(id);
     });
   }
 
@@ -267,8 +288,10 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
             <div className="eyebrow">PASO 02 · DESCUBRIMIENTO POR TÓPICO</div>
             <h2>¿Quién está hablando de este tema?</h2>
             <p className="muted">
-              Busca cuentas de Instagram que publican sobre un tópico, trae su perfil y decide con
-              un LLM cuáles pasan al análisis de tendencias. Cada corrida queda guardada.
+              {tiktok
+                ? "Busca videos de TikTok sobre un tópico, toma a sus autores como candidatos, trae su perfil y decide con un LLM cuáles pasan al análisis de tendencias."
+                : "Busca cuentas de Instagram que publican sobre un tópico, trae su perfil y decide con un LLM cuáles pasan al análisis de tendencias."}{" "}
+              Cada corrida queda guardada.
             </p>
           </div>
           <Search size={22} />
@@ -284,7 +307,7 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
             />
           </label>
           <label>
-            Queries
+            {tiktok ? "Palabras clave" : "Queries"}
             <input
               type="number"
               min={1}
@@ -301,13 +324,15 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
           </button>
         </form>
         <small className="muted">
-          Cada query es una petición a la SERP de Bright Data. Para Latinoamérica se busca desde Colombia.
+          {tiktok
+            ? "Cada palabra clave es una búsqueda de videos en Bright Data (20 por palabra por defecto). Tarda unos minutos; la vista consulta sola el avance."
+            : "Cada query es una petición a la SERP de Bright Data. Para Latinoamérica se busca desde Colombia."}
         </small>
         {preview && (
           <ol className="pipeline-preview">
             {preview.queries.map((q) => (
               <li key={q.keywords}>
-                <span className="pill">{angles[q.angle] || q.angle}</span> <code>{q.query}</code>
+                <span className="pill">{angles[q.angle] || q.angle}</span> <code>{tiktok ? q.keywords.replace(/"/g, "") : q.query}</code>
               </li>
             ))}
           </ol>
@@ -328,7 +353,8 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
             >
               <strong>{r.topic || "Tópicos de la marca"}</strong>
               <small>
-                {new Date(r.created_at).toLocaleString("es")} · {r.totals.candidates} candidatos
+                {new Date(r.created_at).toLocaleString("es")} ·{" "}
+                {ACTIVE.has(r.search.state) ? "buscando videos…" : `${r.totals.candidates} candidatos`}
               </small>
             </button>
           ))}
@@ -340,13 +366,13 @@ export default function DiscoveryPanel({ brand }: { brand: Brand }) {
           <Stepper run={run} step={step} onStep={setStep} />
           <section className="panel pipeline-detail">
             {step === 1 && <QueriesStep run={run} />}
-            {step === 2 && <GoogleStep run={run} />}
+            {step === 2 && (run.platform === "tiktok" ? <VideosStep run={run} /> : <GoogleStep run={run} />)}
             {step === 3 && <CandidatesStep run={run} />}
             {step === 4 && <ProfilesStep run={run} busy={busy === "profiles"} onFetch={fetchProfiles} />}
             {step === 5 && <ReviewStep run={run} />}
             {step === 6 && <PostsStep run={run} data={posts} busy={busy === "posts"} onFetch={fetchPosts} />}
             {step === 7 && <TrendsStep data={trends} />}
-            {step === 8 && <PatternsStep data={patterns} />}
+            {step === 8 && run.platform !== "tiktok" && <PatternsStep data={patterns} />}
           </section>
         </>
       )}
@@ -359,16 +385,27 @@ function Stepper({ run, step, onStep }: { run: DiscoveryRunDetail; step: Step; o
   const errors = run.queries.filter((q) => q.error).length;
   const profilesActive = ACTIVE.has(run.profiles.state);
   const reviewPending = run.candidates.filter((c) => c.review_status === "pending").length;
+  const tiktok = run.platform === "tiktok";
+  const searching = ACTIVE.has(run.search.state);
+  const searchStep = tiktok
+    ? {
+        n: 2 as Step, icon: Clapperboard, title: "Videos de TikTok",
+        value: run.search.state === "ready" ? `${run.totals.results} videos` : profileStates[run.search.state],
+        note: run.search.message,
+        state: (searching ? "active" : run.search.state === "ready" ? (run.status === "partial" ? "warn" : "done") : "warn") as "active" | "done" | "warn",
+      }
+    : {
+        n: 2 as Step, icon: Globe, title: "Google (SERP)", value: `${run.totals.results} resultados`,
+        note: ignored || errors ? `${ignored} queries sin Instagram${errors ? ` · ${errors} con error` : ""}` : `país ${run.countries.join(", ") || "—"}`,
+        state: (ignored || errors ? "warn" : "done") as "done" | "warn",
+      };
   const items: { n: Step; icon: typeof Search; title: string; value: string; note: string; state: "done" | "active" | "waiting" | "warn" }[] = [
-    { n: 1, icon: ListTree, title: "Queries", value: `${run.totals.queries}`, note: run.topic ? `tópico «${run.topic}»` : "tópicos de la marca", state: "done" },
+    { n: 1, icon: ListTree, title: tiktok ? "Palabras clave" : "Queries", value: `${run.totals.queries}`, note: run.topic ? `tópico «${run.topic}»` : "tópicos de la marca", state: "done" },
+    searchStep,
     {
-      n: 2, icon: Globe, title: "Google (SERP)", value: `${run.totals.results} resultados`,
-      note: ignored || errors ? `${ignored} queries sin Instagram${errors ? ` · ${errors} con error` : ""}` : `país ${run.countries.join(", ") || "—"}`,
-      state: ignored || errors ? "warn" : "done",
-    },
-    {
-      n: 3, icon: Users, title: "Candidatos", value: `${run.totals.candidates}`,
-      note: `${run.totals.discarded} descartados · ${run.totals.unresolved} sin autor`, state: run.totals.candidates ? "done" : "warn",
+      n: 3, icon: Users, title: "Candidatos", value: searching ? "—" : `${run.totals.candidates}`,
+      note: tiktok ? `${run.totals.discarded} videos descartados` : `${run.totals.discarded} descartados · ${run.totals.unresolved} sin autor`,
+      state: searching ? "waiting" : run.totals.candidates ? "done" : "warn",
     },
     {
       n: 4, icon: BadgeCheck, title: "Perfiles", value: profileStates[run.profiles.state],
@@ -389,10 +426,11 @@ function Stepper({ run, step, onStep }: { run: DiscoveryRunDetail; step: Step; o
       n: 7, icon: Flame, title: "Tendencias", value: "Tópicos",
       note: "en caliente, emergentes, saturados", state: run.posts.state === "ready" ? "done" : "waiting",
     },
-    {
-      n: 8, icon: Clapperboard, title: "Patrones", value: "Contenido",
-      note: "inicio de los 5 mejores reels", state: run.posts.state === "ready" ? "done" : "waiting",
-    },
+    // Patrones con Gemini necesitan el video; el CDN de TikTok no permite descargarlo.
+    ...(tiktok
+      ? []
+      : [{ n: 8 as Step, icon: Clapperboard, title: "Patrones", value: "Contenido", note: "inicio de los 5 mejores reels",
+           state: (run.posts.state === "ready" ? "done" : "waiting") as "done" | "waiting" }]),
   ];
   return (
     <ol className="pipeline-steps">
@@ -413,16 +451,18 @@ function Stepper({ run, step, onStep }: { run: DiscoveryRunDetail; step: Step; o
 }
 
 function QueriesStep({ run }: { run: DiscoveryRunDetail }) {
+  const tiktok = run.platform === "tiktok";
   return (
     <>
-      <h3>1 · Queries generadas</h3>
+      <h3>1 · {tiktok ? "Palabras clave generadas" : "Queries generadas"}</h3>
       <p className="muted">
         Se arman con reglas a partir del tópico y la identidad de la marca: el tópico solo, con un término
         de contexto que la identidad repite o cruzado con otro tópico de la marca.
+        {tiktok && " En TikTok se buscan los mismos términos, sin operadores de Google."}
       </p>
       <table className="pipeline-table">
         <thead>
-          <tr><th>#</th><th>Ángulo</th><th>Query</th><th>País</th><th>Resultados</th></tr>
+          <tr><th>#</th><th>Ángulo</th><th>{tiktok ? "Palabra clave" : "Query"}</th><th>País</th><th>{tiktok ? "Videos" : "Resultados"}</th></tr>
         </thead>
         <tbody>
           {run.queries.map((q) => (
@@ -484,14 +524,59 @@ function GoogleStep({ run }: { run: DiscoveryRunDetail }) {
   );
 }
 
+function VideosStep({ run }: { run: DiscoveryRunDetail }) {
+  return (
+    <>
+      <h3>2 · Videos encontrados en TikTok</h3>
+      <p className="muted">
+        Bright Data busca videos por cada palabra clave. Su autor pasa a candidato salvo que sea una cuenta de la marca,
+        tenga muy pocos seguidores o solo aparezca con videos antiguos. Si hay más autores que el tope, se priorizan los
+        que aparecen en más palabras clave distintas: constancia en el tema, no un viral suelto.
+      </p>
+      {ACTIVE.has(run.search.state) && (
+        <p className="muted"><LoaderCircle size={12} className="spin" /> {profileStates[run.search.state]} · {run.search.message}</p>
+      )}
+      {!ACTIVE.has(run.search.state) && run.search.state !== "ready" && <p className="profile-message">{run.search.message}</p>}
+      {run.queries.map((q) => (
+        <details key={q.position} className="pipeline-query" open={q.position === 0}>
+          <summary>
+            <code>{q.query}</code>
+            <span>{q.hits.filter((h) => h.outcome === "candidate").length}/{q.results} de candidatos</span>
+          </summary>
+          <ul>
+            {q.hits.map((h) => (
+              <li key={h.rank + h.link} className={h.outcome}>
+                <span className="pipeline-rank">#{h.rank}</span>
+                {h.outcome === "candidate" ? (
+                  <strong>@{h.username}</strong>
+                ) : (
+                  <strong>{h.username ? `@${h.username} · ` : ""}Descartado <small>{h.reason}</small></strong>
+                )}
+                <a href={h.link} target="_blank" rel="noopener noreferrer">
+                  {h.link.replace(/^https:\/\/(www\.)?/, "").slice(0, 70)} <ArrowUpRight size={11} />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ))}
+    </>
+  );
+}
+
 function CandidatesStep({ run }: { run: DiscoveryRunDetail }) {
+  const tiktok = run.platform === "tiktok";
   return (
     <>
       <h3>3 · Candidatos</h3>
-      <p className="muted">Cuentas únicas encontradas, ordenadas por cuántas queries las trajeron y su mejor posición.</p>
+      <p className="muted">
+        {tiktok
+          ? "Autores únicos de los videos, ordenados por cuántas palabras clave distintas los trajeron, cuántos videos suyos aparecieron y su mejor posición."
+          : "Cuentas únicas encontradas, ordenadas por cuántas queries las trajeron y su mejor posición."}
+      </p>
       <table className="pipeline-table">
         <thead>
-          <tr><th>Cuenta</th><th>Queries</th><th>Mejor posición</th><th>Dónde apareció</th></tr>
+          <tr><th>Cuenta</th><th>{tiktok ? "Palabras clave" : "Queries"}</th><th>Mejor posición</th><th>Dónde apareció</th></tr>
         </thead>
         <tbody>
           {run.candidates.map((c) => (
@@ -558,7 +643,8 @@ function ProfilesStep({ run, busy, onFetch }: { run: DiscoveryRunDetail; busy: b
               <>
                 <div className="related-account-metrics">
                   <span><strong>{compact(c.followers)}</strong> seguidores</span>
-                  <span><strong>{compact(c.posts_count)}</strong> posts</span>
+                  <span><strong>{compact(c.posts_count)}</strong> {run.platform === "tiktok" ? "videos" : "posts"}</span>
+                  {c.likes_total != null && <span><strong>{compact(c.likes_total)}</strong> likes</span>}
                 </div>
                 {c.biography && <p>{c.biography}</p>}
               </>
@@ -637,14 +723,16 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
   // Sin veredicto todavía, el post se muestra: se mueve a "fuera del tópico" solo si la revisión lo descarta.
   const offTopic = items.filter((p) => p.topic_review && !p.topic_review.on_topic);
   const shown = onlyTopic ? items.filter((p) => !p.topic_review || p.topic_review.on_topic) : items;
+  const tiktok = run.platform === "tiktok";
   return (
     <>
       <h3>6 · Posts y relevancia</h3>
       <p className="muted">
-        Trae los posts de los últimos {data?.window_days ?? 30} días (máx. {data?.posts_per_creator ?? 30} por creador) de
-        las cuentas que pasan la revisión. Cada post se compara con lo que ese mismo creador consigue normalmente:
-        likes y comentarios proyectados según la edad del post, frente a la mediana de sus otros posts del mismo
-        formato. Bright Data no entrega vistas.
+        Trae los {tiktok ? "videos" : "posts"} de los últimos {data?.window_days ?? 30} días (máx. {data?.posts_per_creator ?? 30} por creador) de
+        las cuentas que pasan la revisión. Cada {tiktok ? "video" : "post"} se compara con lo que ese mismo creador consigue normalmente:
+        {tiktok
+          ? " vistas, likes, compartidos y comentarios proyectados según la edad del video, frente a la mediana de sus otros videos. Las vistas pesan más: miden el alcance."
+          : " likes y comentarios proyectados según la edad del post, frente a la mediana de sus otros posts del mismo formato. Bright Data no entrega vistas."}
       </p>
       <div className="analysis-stamp">
         <span>
@@ -669,7 +757,7 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
       {!!data?.transcripts.reels && (
         <p className="muted">
           {data.transcripts.pending > 0 && data.transcripts.enabled && <LoaderCircle size={12} className="spin" />}{" "}
-          Transcripción (primeros 30 s): {data.transcripts.done} de {data.transcripts.reels} reels
+          Transcripción (primeros 30 s): {data.transcripts.done} de {data.transcripts.reels} {tiktok ? "videos" : "reels"}
           {data.transcripts.pending > 0 && ` · ${data.transcripts.pending} pendientes`}
           {data.transcripts.failed > 0 && ` · ${data.transcripts.failed} sin video disponible`}
           {!data.transcripts.enabled && " · configura OPENAI_API_KEY"}
@@ -687,8 +775,8 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
         <table className="pipeline-table">
           <thead>
             <tr>
-              <th>Creador</th><th>Posts</th><th>Por semana</th><th>Reels / estáticos</th><th>Likes típicos</th>
-              <th>Comentarios típicos</th><th>Engagement típico</th>
+              <th>Creador</th><th>Posts</th><th>Por semana</th><th>{tiktok ? "Videos / fotos" : "Reels / estáticos"}</th>
+              {tiktok && <th>Vistas típicas</th>}<th>Likes típicos</th><th>Comentarios típicos</th><th>Engagement típico</th>
             </tr>
           </thead>
           <tbody>
@@ -705,12 +793,13 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
                     <td>{c.baseline.posts}</td>
                     <td>{c.baseline.posts_per_week}</td>
                     <td>{c.baseline.formats.video} / {c.baseline.formats.static}</td>
+                    {tiktok && <td>{compact(c.baseline.median_views)}</td>}
                     <td>{compact(c.baseline.median_likes)}</td>
                     <td>{compact(c.baseline.median_comments)}</td>
                     <td>{percent(c.baseline.median_engagement_rate)}</td>
                   </>
                 ) : (
-                  <td colSpan={6} className="muted">{c.posts_fetched_at ? "Sin posts en la ventana" : "Posts sin recoger"}</td>
+                  <td colSpan={tiktok ? 7 : 6} className="muted">{c.posts_fetched_at ? "Sin posts en la ventana" : "Posts sin recoger"}</td>
                 )}
               </tr>
             ))}
@@ -725,11 +814,11 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
           <label className="post-filter">
             <input type="checkbox" checked={onlyTopic} onChange={(e) => setOnlyTopic(e.target.checked)} /> Solo sobre el tópico
           </label>
-          <PostTable items={shown} />
+          <PostTable items={shown} tiktok={tiktok} />
           {onlyTopic && !!offTopic.length && (
             <details className="post-off-topic">
               <summary>Fuera del tópico ({offTopic.length}): no cuentan para tendencias</summary>
-              <PostTable items={offTopic} />
+              <PostTable items={offTopic} tiktok={tiktok} />
             </details>
           )}
         </>
@@ -739,12 +828,13 @@ function PostsStep({ run, data, busy, onFetch }: { run: DiscoveryRunDetail; data
   );
 }
 
-function PostTable({ items }: { items: RunPosts["items"] }) {
+function PostTable({ items, tiktok = false }: { items: RunPosts["items"]; tiktok?: boolean }) {
   return (
           <table className="pipeline-table post-table">
             <thead>
               <tr>
-                <th>Post</th><th>Rendimiento</th><th>Likes</th><th>Coment.</th><th>Engagement</th><th>Velocidad</th><th>Edad</th>
+                <th>Post</th><th>Rendimiento</th>{tiktok && <th>Vistas</th>}<th>Likes</th>{tiktok && <th>Compart.</th>}<th>Coment.</th>
+                <th>Engagement</th><th>Velocidad</th><th>Edad</th>
               </tr>
             </thead>
             <tbody>
@@ -785,7 +875,9 @@ function PostTable({ items }: { items: RunPosts["items"] }) {
                     </small>
                     {p.comment_bait && <small className="pipeline-flag">posible «comenta y te envío»</small>}
                   </td>
+                  {tiktok && <td>{number(p.views)}{p.signals.views && <small className="muted"> base {compact(p.signals.views.baseline)}</small>}</td>}
                   <td>{number(p.likes)}{p.signals.likes && <small className="muted"> base {compact(p.signals.likes.baseline)}</small>}</td>
+                  {tiktok && <td>{number(p.shares)}{p.signals.shares && <small className="muted"> base {compact(p.signals.shares.baseline)}</small>}</td>}
                   <td>{number(p.comments)}{p.signals.comments && <small className="muted"> base {compact(p.signals.comments.baseline)}</small>}</td>
                   <td>{percent(p.engagement_rate)}</td>
                   <td title={p.velocity ? `${p.velocity.observations} lecturas en ${p.velocity.hours} h` : "Hace falta otra lectura con al menos 6 h de diferencia"}>
@@ -799,9 +891,11 @@ function PostTable({ items }: { items: RunPosts["items"] }) {
   );
 }
 
+const signalNames: Record<string, string> = { views: "Vistas", likes: "Likes", shares: "Compartidos", comments: "Comentarios" };
+
 function signalTitle(p: { signals: RunPosts["items"][number]["signals"]; maturity: number }) {
   const parts = Object.entries(p.signals).map(
-    ([name, s]) => `${name === "likes" ? "Likes" : "Comentarios"}: ${s.observed} observadas → ${s.projected} proyectadas vs base ${s.baseline} (×${s.ratio}, z ${s.z}, ${s.baseline_posts} posts)`,
+    ([name, s]) => `${signalNames[name] || name}: ${s.observed} observadas → ${s.projected} proyectadas vs base ${s.baseline} (×${s.ratio}, z ${s.z}, ${s.baseline_posts} posts)`,
   );
   return [`Madurez estimada ${Math.round(p.maturity * 100)}%`, ...parts].join("\n");
 }

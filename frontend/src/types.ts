@@ -210,7 +210,7 @@ export type DiscoveryHit = {
   link: string;
   outcome: "candidate" | "discarded" | "unresolved";
   username: string | null;
-  author_source: "url" | "snippet" | "oembed" | null;
+  author_source: "url" | "snippet" | "oembed" | "video" | null;
   reason: string | null;
 };
 export type DiscoveryQueryRun = {
@@ -236,16 +236,20 @@ export type DiscoveryCandidate = Omit<
     | "awaiting_profile"
     | "not_requested";
   included: boolean;
+  // Solo TikTok: likes acumulados por todos sus videos.
+  likes_total?: number | null;
   query_hits: number;
   best_rank: number;
   sources: { query: string; link: string; rank: number; author_source: string }[];
 };
+export type DiscoveryPlatform = "instagram" | "tiktok";
 export type DiscoveryRunSummary = {
   id: string;
   brand_id: string;
-  status: "completed" | "partial" | "failed";
+  status: "completed" | "partial" | "failed" | "pending";
   created_at: string;
   topic: string | null;
+  platform: DiscoveryPlatform;
   countries: string[];
   max_queries: number;
   totals: {
@@ -255,6 +259,8 @@ export type DiscoveryRunSummary = {
     discarded: number;
     unresolved: number;
   };
+  // TikTok: búsqueda asíncrona de videos por palabra clave. Instagram queda en not_started.
+  search: { state: StageState; message: string; updated_at: string | null };
   profiles: { state: StageState; message: string; requested: number; updated_at: string | null };
   posts: { state: StageState; message: string; requested: number; updated_at: string | null };
 };
@@ -282,6 +288,8 @@ export type CreatorPost = {
   comments: number | null;
   views: number | null;
   plays: number | null;
+  shares: number | null;
+  saves: number | null;
   duration_seconds: number | null;
   is_paid_partnership: boolean | null;
   is_pinned: boolean | null;
@@ -295,7 +303,7 @@ export type CreatorPost = {
   age_hours: number;
   maturity: number;
   baseline_scope: "formato" | "todos";
-  signals: Partial<Record<"likes" | "comments", PostSignal>>;
+  signals: Partial<Record<"views" | "likes" | "shares" | "comments", PostSignal>>;
   comment_bait: boolean;
   engagement_rate: number | null;
   velocity: { hours: number; observations: number; likes_per_hour: number | null; comments_per_hour: number | null } | null;
@@ -317,8 +325,10 @@ export type CreatorBaseline = {
   mature_posts: number;
   posts_per_week: number;
   formats: { video: number; static: number };
+  median_views: number | null;
   median_likes: number | null;
   median_comments: number | null;
+  median_shares: number | null;
   median_engagement_rate: number | null;
   followers: number | null;
 };
@@ -329,7 +339,7 @@ export type RunPosts = DiscoveryRunSummary & {
     tau_hours: { video: number; static: number };
     min_age_hours: number;
     min_baseline_posts: number;
-    weights: { likes: number; comments: number };
+    weights: Partial<Record<"views" | "likes" | "shares" | "comments", number>>;
   };
   creators: (Pick<DiscoveryCandidate, "username" | "profile_url" | "full_name" | "followers" | "avatar_url" | "is_verified"> & { posts_fetched_at: string | null; baseline: CreatorBaseline | null })[];
   topic: string;
@@ -357,7 +367,7 @@ export type InstagramTrendTopic = {
   performance_change: number | null;
   momentum: number | null;
   cells: { week: string; posts: number; creators: number; median_performance: number | null }[];
-  formats: { reel: number; carousel: number; image: number };
+  formats: { reel: number; video?: number; carousel: number; image: number };
   evidence: { shortcode: string; url: string; username: string; performance: number; label: PostLabel; content_type: string; caption: string }[];
   production: Record<string, string | number> | null;
 };
