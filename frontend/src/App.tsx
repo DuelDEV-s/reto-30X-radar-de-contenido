@@ -21,6 +21,7 @@ import {
   ScanLine,
 } from "lucide-react";
 import { api } from "./types";
+import { personaNeedText } from "./identityText";
 import type {
   Brand,
   Batch,
@@ -1296,7 +1297,10 @@ function IdentityEditor({
   ) => void;
   busy: boolean;
 }) {
-  const [value, setValue] = useState(brand.identity);
+  const [value, setValue] = useState(() => ({
+    ...brand.identity,
+    personas: brand.identity.personas.map(p => ({...p, need: personaNeedText(p.need)})),
+  }));
   const edit = (key: keyof Identity, v: unknown) =>
     setValue((x) => ({ ...x, [key]: v }));
   const editPersona = (i: number, key: keyof Persona, text: string | string[]) =>

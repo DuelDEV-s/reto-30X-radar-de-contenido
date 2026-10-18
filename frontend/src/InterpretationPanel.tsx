@@ -1,5 +1,6 @@
 import { ArrowUpRight, UsersRound, ClipboardCheck } from "lucide-react";
 import type { InterpretationEvidence, ProfileAnalysis } from "./types";
+import { personaNeedText } from "./identityText";
 
 function Evidence({ items }: { items: InterpretationEvidence[] }) {
   return (
@@ -46,8 +47,6 @@ export default function InterpretationPanel({
     text_supported: "Personas propuestas con respaldo textual",
   };
   const basis = { declared: "Contexto del equipo", textual: "Señal en los textos", exploratory: "Hipótesis exploratoria", team: "Edición del equipo" };
-  const platforms: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube", linkedin: "LinkedIn" };
-  const amount = (n: number | null) => n === null ? "Sin datos" : n.toLocaleString("es", { maximumFractionDigits: 1 });
   return (
     <div className="interpretation-panel">
       <div className="interpretation-context">
@@ -83,7 +82,7 @@ export default function InterpretationPanel({
               <article className="audience-persona" key={h.role}>
                 <div className="persona-card-top"><span className="persona-number">{String(i + 1).padStart(2, "0")}</span><span className="pill">{basis[h.basis || "textual"]}</span></div>
                 <h4>{h.role}</h4>
-                <p>{h.need}</p>
+                <p>{personaNeedText(h.need)}</p>
                 <dl className="persona-attributes">
                   {h.goal && <div><dt>Qué busca lograr</dt><dd>{h.goal}</dd></div>}
                   {!!h.barriers?.length && <div><dt>Barreras a comprobar</dt><dd><ul>{h.barriers.map(v => <li key={v}>{v}</li>)}</ul></dd></div>}
@@ -125,19 +124,6 @@ export default function InterpretationPanel({
           </article>
         ))}
       </div>
-      {!!detail.content_snapshot?.length && <section aria-label="Lectura de la muestra de contenido">
-        <h3>Lo que sí sabemos del contenido</h3>
-        <p className="muted">Resumen de las piezas incluidas en el análisis. La mediana y los enlaces corresponden solo a esta muestra; no indican crecimiento ni rendimiento habitual.</p>
-        <div className="interpretation-facts">{detail.content_snapshot.map(s => <article key={s.platform}>
-          <h4>{platforms[s.platform]}</h4>
-          <div className="sample-summary-stats"><div><small>Piezas analizadas</small><strong>{s.sample_size}</strong></div><div><small>Con vistas conocidas</small><strong>{s.with_views}</strong></div><div><small>Mediana de vistas</small><strong>{amount(s.median_views)}</strong></div></div>
-          {s.sample_size === 0 ? <p>El perfil no incluyó publicaciones para leer. Su contador de videos no equivale a videos analizados.</p> : <>
-            <p>Formatos observados: {s.formats.join(", ") || "no informados"}.</p>
-            {s.latest_published_at && <small>Publicación más reciente de la muestra: {new Date(s.latest_published_at).toLocaleDateString("es")}</small>}
-            {!!s.top_content.length && <><h4>Mayores vistas de la muestra</h4>{s.top_content.map(post => <div className="sample-highlight" key={post.url}><a href={post.url} target="_blank" rel="noopener noreferrer">{post.title} <ArrowUpRight size={12} /></a><small>{amount(post.views)} vistas observadas</small></div>)}</>}
-          </>}
-        </article>)}</div>
-      </section>}
       {!!detail.next_steps?.length && <section aria-label="Próximas acciones del perfil"><h3>Cómo fortalecer este perfil</h3><div className="profile-next-steps">{detail.next_steps.map((s, i) => <article key={s.title}><span>{String(i + 1).padStart(2, "0")}</span><div><h4>{s.title}</h4><p>{s.action}</p><small>{s.reason}</small></div></article>)}</div></section>}
       <details className="interpretation-limits" open>
         <summary>Alcance y datos que faltan</summary>
