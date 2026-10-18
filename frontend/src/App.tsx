@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import {
   Radar,
@@ -34,6 +34,8 @@ import type {
 import ProfileAnalysisPanel from "./ProfileAnalysisPanel";
 import RelatedAccountsPanel from "./RelatedAccountsPanel";
 import DiscoveryWorkspace from "./DiscoveryWorkspace";
+import SourcesWorkspace from "./SourcesWorkspace";
+const EditorialWorkspace = lazy(() => import("./EditorialWorkspace"));
 
 const compact = (n: number) =>
   new Intl.NumberFormat("es", {
@@ -107,7 +109,19 @@ function Sparkline({
 }
 
 export default function App() {
-  const [tab, setTab] = useState("radar"),
+  const [editorialSource, setEditorialSource] = useState("");
+  const [tab, setTab] = useState(() => {
+      const view = new URLSearchParams(location.search).get("view") || "radar";
+      return [
+        "radar",
+        "identity",
+        "discovery",
+        "integration",
+        "classic",
+      ].includes(view)
+        ? view
+        : "radar";
+    }),
     [brands, setBrands] = useState<Brand[]>([]),
     [brand, setBrand] = useState<Brand | null>(null);
   const [batches, setBatches] = useState<Batch[]>([]),
@@ -123,6 +137,13 @@ export default function App() {
     [notice, setNotice] = useState("");
   const [showCreate, setShowCreate] = useState(false),
     [selected, setSelected] = useState<Topic | null>(null);
+
+  useEffect(() => {
+    const u = new URL(location.href);
+    u.searchParams.set("view", tab);
+    if (brand) u.searchParams.set("brand", brand.id);
+    history.replaceState(null, "", u);
+  }, [tab, brand?.id]);
 
   useEffect(() => {
     if (!showCreate && !selected) return;
@@ -167,7 +188,11 @@ export default function App() {
     let active = true;
     api<Brand[]>("/brands")
       .then((data) => {
-        if (active) setBrands(data);
+        if (active) {
+          setBrands(data);
+          const saved = new URLSearchParams(location.search).get("brand");
+          if (saved) setBrand(data.find((b) => b.id === saved) || null);
+        }
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -375,7 +400,7 @@ export default function App() {
       const list = await api<Batch[]>(`/brands/${brand!.id}/trend-batches`);
       setBatches(list);
       setBatchId(data.id);
-      setTab("radar");
+      openEditorial(`batch:${data.id}`);
       setNotice("Lote importado y validado. El radar ya puede analizarlo.");
     });
   }
@@ -385,9 +410,19 @@ export default function App() {
       setBatches(list);
       setBatchBrandId(brand!.id);
       setBatchId(id);
-      setTab("radar");
+      setTab("classic");
       setNotice("Lote del radar LinkedIn + YouTube cargado en el paso 3.");
     });
+  }
+  function openEditorial(source: string) {
+    const u = new URL(location.href);
+    u.searchParams.set("radar_source", source);
+    if (brand) u.searchParams.set("brand", brand.id);
+    for (const key of ["radar_topic", "radar_search", "radar_network"])
+      u.searchParams.delete(key);
+    history.replaceState(null, "", u);
+    setEditorialSource(source);
+    setTab("radar");
   }
   const topics =
     report?.topics.filter((t) =>
@@ -528,7 +563,9 @@ export default function App() {
                     ? "Primero, entiende tu marca."
                     : tab === "discovery"
                       ? "Descubre qué se mueve en tu tema."
-                      : "Conecta las señales."}
+                      : tab === "integration"
+                        ? "Tus fuentes, conectadas."
+                        : "Explora el historial de tus lotes."}
               </h1>
               <p>
                 {tab === "radar"
@@ -536,8 +573,10 @@ export default function App() {
                   : tab === "identity"
                     ? "Una identidad clara convierte tendencias en oportunidades relevantes."
                     : tab === "discovery"
-                      ? "Elige la red: creadores en Instagram o tendencias en LinkedIn y YouTube, con la evidencia a la vista."
-                      : "El punto de encuentro con el equipo que descubre contenido público."}
+                      ? "Elige Instagram, TikTok, LinkedIn o YouTube y explora la evidencia antes de crear."
+                      : tab === "integration"
+                        ? "Corridas guardadas, estado de conectores y acceso a tus informes."
+                        : "Observaciones y análisis del contrato de lotes v1."}
               </p>
             </div>
             <button className="button dark" onClick={() => setShowCreate(true)}>
@@ -558,7 +597,7 @@ export default function App() {
               {notice}
             </div>
           )}
-          {currentBatch?.mode === "demo" && (
+          {tab === "classic" && currentBatch?.mode === "demo" && (
             <div className="demo-banner">
               <ScanLine size={17} />
               <strong>Estás explorando una demo.</strong>
@@ -626,14 +665,42 @@ export default function App() {
               busy={busy}
             />
           ) : tab === "discovery" ? (
-            <DiscoveryWorkspace brand={brand} onOpenBatch={openBatch} />
-          ) : tab === "integration" ? (
-            <Integration
+            <DiscoveryWorkspace
               brand={brand}
-              batches={batches}
-              busy={busy}
-              onImport={importBatch}
+              onOpenBatch={openBatch}
+              onOpenEditorial={openEditorial}
             />
+          ) : tab === "radar" ? (
+            <Suspense
+              fallback={
+                <div className="ed-loading" role="status">
+                  <LoaderCircle className="spin" /> Preparando informe
+                  editorial…
+                </div>
+              }
+            >
+              <EditorialWorkspace
+                key={brand.id}
+                brand={brand}
+                requestedSource={editorialSource}
+                onDiscover={() => setTab("discovery")}
+                onClassic={() => setTab("classic")}
+              />
+            </Suspense>
+          ) : tab === "integration" ? (
+            <SourcesWorkspace
+              key={brand.id}
+              brand={brand}
+              onDiscover={() => setTab("discovery")}
+              onOpenEditorial={openEditorial}
+            >
+              <Integration
+                brand={brand}
+                batches={batches}
+                busy={busy}
+                onImport={importBatch}
+              />
+            </SourcesWorkspace>
           ) : (
             <>
               <section className="radar-intro">
@@ -1098,16 +1165,20 @@ function CreateForm({
               name={p}
               type="url"
               placeholder={
-                p === "youtube"
-                  ? "https://www.youtube.com/@tu-marca"
-                  : `https://www.${p}.com/tu-marca`
+                p === "youtube" || p === "tiktok"
+                  ? `https://www.${p}.com/@${p === "tiktok" ? "tu_marca" : "tu-marca"}`
+                  : p === "linkedin"
+                    ? "https://www.linkedin.com/company/tu-marca"
+                    : "https://www.instagram.com/tu-marca"
               }
               maxLength={500}
             />
             <small className="connector-status">
               {connector?.configured
                 ? connector.primary?.configured
-                  ? "Bright Data principal · API oficial como respaldo"
+                  ? p === "instagram" || p === "youtube"
+                    ? "Bright Data principal · API oficial como respaldo"
+                    : "Bright Data · perfiles públicos de marca"
                   : "API oficial disponible como respaldo"
                 : connector?.missing.length
                   ? "Requiere credenciales de servidor"
@@ -1404,10 +1475,11 @@ function Integration({
     <div className="integration-layout">
       <section className="panel">
         <div className="eyebrow">PASO 02 → PASO 03</div>
-        <h2>Una entrada común para todo el equipo.</h2>
+        <h2>Importa observaciones de otro recolector.</h2>
         <p>
-          El equipo del paso 2 entrega un lote de piezas públicas con evidencia
-          temporal. Se valida antes de guardarlo.
+          Usa esta opción para integrar un lote externo con evidencia temporal.
+          Las corridas del paso 2 ya aparecen automáticamente en Fuentes
+          guardadas.
         </p>
         <div className="endpoint">
           <span>POST</span>

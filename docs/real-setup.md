@@ -1,106 +1,70 @@
-# Pasar de la demo a datos reales
+# Configuración real de los tres pasos
 
-La aplicación ya arranca y guarda información en PostgreSQL. El análisis automático de perfiles de la marca usa Bright Data como fuente principal para YouTube e Instagram y conserva las APIs oficiales de respaldo: seguir [la guía de configuración](bright-data.md). El descubrimiento del paso 2 y el proveedor IA/JEV siguen pendientes de integración. Las claves por sí solas no implementan estos últimos módulos.
+El prototipo tiene identidad de marca, descubrimiento y un informe editorial. No hace falta otra clave para el paso 3: lee lo que el paso 2 ya guardó.
 
-## 1. Preparar el entorno del equipo
+## 1. Actualizar y levantar el entorno
 
-Con Docker Desktop y el motor Linux encendidos:
+Desde la raíz del repositorio, conservar el `.env` existente. Si no existe, copiar `.env.example` a `.env` y completar las variables necesarias. No subir ese archivo a Git.
 
-```powershell
-git clone https://github.com/DuelDEV-s/reto-30X-radar-de-contenido.git
-cd reto-30X-radar-de-contenido
-Copy-Item .env.example .env
-# Revisar .env antes del primer arranque.
-docker compose up --build -d
+```bash
+git pull --ff-only
+docker compose up -d --build
 docker compose ps
-Invoke-RestMethod http://localhost:8000/api/health
 ```
 
-Si ya existe `.env`, conservarlo. La plantilla incluye base de datos, configuración local y credenciales de los conectores de perfiles. En Compose, el origen CORS está fijado en `compose.yaml`; la variable de la plantilla sirve al backend ejecutado fuera de Docker cuando se exporta en su terminal. `.env` no se lee automáticamente en Python local.
+Docker Desktop debe tener activo su motor Linux. Compose aplica las migraciones existentes al iniciar la API y conserva los volúmenes de PostgreSQL y del radar. No usar `down -v` para actualizar.
 
-Interfaz: http://localhost:5173. Swagger: http://localhost:8000/docs. PostgreSQL desde el host: `localhost:15432`; desde el contenedor API: `db:5432`. En Docker no usar la URL SQLite de la plantilla para reemplazar la conexión PostgreSQL que ya configura Compose.
+Interfaz: http://localhost:5173. API: http://localhost:8000/docs. PostgreSQL desde el host: `localhost:15432`; desde la API: `db:5432`.
 
-La contraseña de ejemplo es para desarrollo local. Establecer la propia antes de inicializar una base nueva; si el volumen ya existe, cambiar el archivo no cambia la contraseña del usuario PostgreSQL. No borrar el volumen para resolverlo si contiene datos que deban conservarse.
+## 2. Paso 1: perfiles públicos de marca
 
-## 2. Crear y confirmar una marca real — paso 1
+| Red | Configuración del proveedor principal | Alcance |
+| --- | --- | --- |
+| Instagram | `BRIGHT_DATA_API_KEY` + `BRIGHT_DATA_INSTAGRAM_DATASET_ID` | Biografía, seguidores, publicaciones y muestra disponible |
+| YouTube | `BRIGHT_DATA_API_KEY` + `BRIGHT_DATA_YOUTUBE_DATASET_ID` | Descripción del canal y contadores disponibles |
+| TikTok | `BRIGHT_DATA_API_KEY`; ID opcional `BRIGHT_DATA_TIKTOK_PROFILES_DATASET_ID` | Biografía, seguidores y total de videos. Valor por defecto `gd_l1villgoiiidt09ci` |
+| LinkedIn | `BRIGHT_DATA_API_KEY`; ID opcional `BRIGHT_DATA_LINKEDIN_COMPANIES_DATASET_ID` | Páginas `/company/`: descripción, especialidades y seguidores. Valor por defecto `gd_l1vikfnt1wgvvqz95w` |
 
-En **Nueva marca**, introducir nombre, propuesta, audiencia, región y tópicos. Añadir referencias públicas de la organización y sus descripciones, revisando que no incluyan datos personales.
+Comprobar que los scrapers estén habilitados en la cuenta de Bright Data y que el plan tenga saldo/cuota. La presencia de variables no valida credenciales en vivo. TikTok reutiliza perfiles públicos vigentes del paso 2; una nueva recolección explícita sí puede consumir créditos.
 
-Con nombre y enlaces se puede iniciar una marca; los demás textos son opcionales. Bright Data o el respaldo oficial configurado producen un JSON del perfil y un borrador con contexto textual. Si faltan claves se muestra el requisito. En **Identidad de marca**, revisar definición, tópicos y personas y confirmar. El trabajo manual sigue disponible sin API key.
+Meta Business Discovery es respaldo de Instagram (`META_ACCESS_TOKEN`, `META_IG_USER_ID`, `META_GRAPH_VERSION`); `YOUTUBE_API_KEY` permite el respaldo oficial de YouTube. LinkedIn y TikTok no tienen API oficial de respaldo implementada. [Configuración y contrato completo](bright-data.md).
 
-## 3. Conectar la fuente de los compañeros — paso 2
+Después de cambiar `.env`, recrear la API:
 
-El equipo debe escoger una fuente que permita tanto obtener contenido público como reutilizar sus datos para el análisis propuesto. Registrar método, procedencia y condiciones aplicables. Un dataset abierto también necesita permiso compatible; copiar manualmente o cambiar la etiqueta del método no elimina las condiciones de la fuente.
-
-Para una primera entrega, preparar un lote pequeño de contenido real con métricas verificadas y procedencia. Enviarlo a:
-
-```text
-POST /api/brands/{brand_id}/trend-batches
-Content-Type: application/json
+```bash
+docker compose up -d --force-recreate api
 ```
 
-Consultar [el contrato v1](step-2-contract.md) y el esquema `BatchCreate` en Swagger. Marcar `mode: "public"` únicamente para observaciones reales y usar el método correspondiente (`official_api`, `open_dataset` o `manual_public`). `compliance_confirmed` es una declaración del proveedor, no una verificación automática.
+Python local no carga `.env` automáticamente: exportar variables en su terminal. Las claves nunca se configuran como `VITE_*` ni se envían al frontend.
 
-El adaptador del paso 2 todavía debe implementarse. Debe:
+## 3. Paso 2: elegir el motor
 
-1. Descubrir piezas por los tópicos de `GET /api/brands/{id}`.
-2. Mantener IDs estables, normalizar tópicos y excluir campos personales.
-3. Guardar observaciones reales con fecha y zona horaria.
-4. Reunir el historial completo de cada pieza en `snapshots` y entregar un lote por consulta.
-5. Manejar límites de peticiones, errores, deduplicación y reglas de actualización o eliminación exigidas por la fuente.
+**Instagram:** configurar Bright Data, la zona SERP (`BRIGHT_DATA_SERP_ZONE`) y los scrapers de perfiles y posts. `OPENAI_API_KEY` habilita revisión de cuentas, relevancia y agrupación temática. `GEMINI_API_KEY` y el modelo correspondiente habilitan el análisis de producción cuando está disponible. Revisar [líneas base y revisión de posts](post-relevance.md).
 
-El contrato actual exige un gancho. Si no se ha observado la apertura, no inventarlo ni tratar el título como transcripción: completar la revisión editorial antes de importar, o acordar una versión del contrato que acepte ese dato ausente. Igualmente, si una fuente no expone vistas, hay que ampliar el contrato para otra métrica; no poner likes o impresiones en `views`.
+**TikTok:** usa la misma key de Bright Data para buscar videos por palabra clave y obtener perfiles/posts. Los IDs tienen valores publicados predeterminados. La revisión temática usa OpenAI. El análisis audiovisual descargado de TikTok no está disponible: no se intenta saltar las restricciones de su CDN. [Variables y flujo de TikTok](tiktok.md).
 
-### Si consideran YouTube
+**LinkedIn/YouTube:** el motor integrado usa `EXA_API_KEY`, `YOUTUBE_API_KEY` y `ANTHROPIC_API_KEY` según su configuración actual; `BRAVE_API_KEY` amplía la búsqueda de LinkedIn. Ver [modelo, presupuesto y variables del radar](trend-radar.md). El presupuesto predeterminado de corrida es `RUN_BUDGET_USD=6`; no es un límite global de la cuenta. Configurar cuotas en los proveedores. La política de uso aplicable a los datos de YouTube debe estar verificada por el equipo.
 
-Para acceder técnicamente a datos públicos: crear un proyecto en Google Cloud, habilitar YouTube Data API v3 y obtener una API key. El descubrimiento usa `search.list`; el recurso `videos.list` permite consultar metadatos y estadísticas. Revisar la cuota de su proyecto. [Inicio oficial](https://developers.google.com/youtube/data/getting-started), [búsqueda](https://developers.google.com/youtube/data/reference/rest/v3/search/list), [videos](https://developers.google.com/youtube/data/reference/rest/v3/videos/list).
+Iniciar una corrida desde Descubrimiento puede consumir créditos de recolección y modelos. Las consultas de avance del paso 2 pueden procesar tandas pendientes; esto es distinto del informe del paso 3, que solo lee datos guardados.
 
-**Antes de conectar estos datos al score:** las políticas generales restringen métricas derivadas y agregación; las condiciones adicionales de analítica requieren el proceso de aceptación/aprobación aplicable. No asumir que crear la key autoriza este radar. La retención también debe ajustarse a las condiciones de acceso. [Políticas](https://developers.google.com/youtube/terms/developer-policies), [condiciones adicionales](https://developers.google.com/youtube/terms/derived-metrics-policy).
+## 4. Paso 3: revisar y producir
 
-Si el uso está habilitado y se implementa el adaptador, el contrato v1 acepta `https://youtu.be/ID_DEL_VIDEO`. La URL `youtube.com/watch?v=...` actualmente se rechaza porque contiene parámetros. El ejemplo de documentación tiene datos ficticios y no debe convertirse en un lote público.
+Elegir la marca, pulsar **Ver informe editorial** al terminar el paso 2 o abrir **Radar de contenido** y seleccionar la corrida. No requiere una API key nueva. Revisar prioridades, series, señales, encaje con marca y evidencia antes de usar la propuesta. La preview se carga al pulsarla y puede quedar bloqueada por la plataforma; siempre se conserva el enlace original cuando existe. [Flujo y método](editorial-radar.md).
 
-Para LinkedIn, Instagram y TikTok, verificar con el equipo qué acceso y uso permite su fuente concreta. La aplicación no incluye un conector universal a las cuatro redes.
+Si no aparecen temas, comprobar que la corrida tenga publicaciones y revisiones temáticas guardadas con línea base calculable. Sin agrupación semántica, se muestran etiquetas exactas como agrupación provisional. Las notas de cobertura indican qué falta. Una corrida de LinkedIn/YouTube debe terminar y guardar su reporte.
 
-## 4. Obtener historia temporal real
+## 5. Verificación sin gasto
 
-Con una observación por pieza se pueden ver vistas, pero no aceleración. Con dos se puede calcular una velocidad. Se necesitan **tres observaciones y una velocidad previa positiva** para comparar las dos últimas velocidades; la aplicación ya refleja los casos sin evidencia suficiente.
+**Explorar demo** genera una marca y 18 piezas ficticias. Permite probar ranking, selección, filtros, series, brief y exportación sin proveedores. Las URLs ficticias no se abren ni generan previews. Para pruebas automatizadas:
 
-El equipo debe ejecutar su recolector periódicamente, por ejemplo cada seis horas como decisión inicial a validar con la fuente y su cuota. El planificador/recolector no está implementado. Los lotes no se fusionan automáticamente: cada nueva entrega debe incluir el historial que quieren analizar.
+```bash
+cd backend
+python -m pytest -q
+cd ../frontend
+npm ci
+npm run build
+```
 
-Tres muestras del mismo día permiten una comparación de esos intervalos; no prueban crecimiento durante una semana. Para responder una pregunta semanal hace falta recoger esa historia o disponer de un conjunto histórico cuyo uso esté permitido. No fabricar fechas ni repetir el mismo valor como si fueran mediciones independientes.
+Los lotes v1 de otros recolectores siguen admitidos mediante `POST /api/brands/{id}/trend-batches`; ver [contrato de lotes](step-2-contract.md). El informe conserva separado cada lote y corrida. Tres observaciones permiten comparar velocidades del lote; no sustituyen una historia semanal real ni una muestra representativa.
 
-## 5. Integrar IA/JEV — pasos 1 y 3
-
-Elegir proveedor y modelo, obtener credenciales de servidor y confirmar su endpoint, autenticación y formato de respuesta. El acceso a JEV no está configurado ni se presupone un contrato de API.
-
-Desarrollo pendiente en `backend/app/services.py`:
-
-- **`draft_identity`:** enviar el brief y los textos públicos aportados para proponer definición, tópicos y segmentos. Validar la respuesta con `Identity`, mantenerla en borrador y conservar revisión humana.
-- **Esquema de procedencia:** `Identity.method` admite `brief_rules`, `profile_rules` y `human_review`; ampliarlo si se añade generación con modelo y registrar proveedor/modelo de forma explícita.
-- **`analyze`:** conservar los cálculos numéricos en Python. Pedir al modelo hipótesis editoriales y adaptaciones basadas en la evidencia disponible, con referencias a las piezas y sin atribuir causalidad.
-- Validar la salida, limitar tokens/costo, añadir timeout y manejar errores. Si se usan reglas como alternativa, identificarlas en el resultado y actualizar los textos de la interfaz que hoy dicen que no hay IA.
-
-Variables **propuestas, aún no implementadas para un LLM**: `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`. Necesitan lectura en el backend y paso explícito al servicio Compose. Las variables `BRIGHT_DATA_API_KEY`, `BRIGHT_DATA_INSTAGRAM_DATASET_ID`, `BRIGHT_DATA_YOUTUBE_DATASET_ID` y las de respaldo `YOUTUBE_API_KEY`, `YOUTUBE_ANALYTICS_APPROVED`, `META_ACCESS_TOKEN`, `META_IG_USER_ID` y `META_GRAPH_VERSION` ya se leen y se pasan al backend. El recolector del paso 2 puede tener sus propias credenciales. Nunca incluir claves en `VITE_*`, Git, payloads de procedencia o logs.
-
-## 6. Verificar el circuito completo
-
-1. Crear una marca real y confirmar su identidad.
-2. Importar un lote pequeño de una fuente permitida y comprobar enlaces, textos, vistas y fechas contra esa fuente.
-3. Confirmar que el informe identifica `mode: "public"`; los fixtures siguen en `demo`.
-4. Incorporar dos observaciones adicionales reales, cuando transcurra el intervalo definido, y entregar un nuevo lote con las tres.
-5. Revisar `GET /api/brands/{id}/report?batch_id={batch_id}` y contrastar manualmente una aceleración calculada.
-6. Si se integra IA, comprobar que referencias y métricas no cambian y que las hipótesis están etiquetadas.
-7. Reiniciar los servicios sin eliminar volúmenes y comprobar que marcas y lotes permanecen.
-
-Para compartir una instancia por Internet todavía hacen falta autenticación, separación de usuarios, HTTPS, límites y gestión de secretos/retención. El Compose actual está preparado para uso local y publica puertos solo en loopback.
-
-## Reparto para la hackathon
-
-| Responsable | Siguiente entrega |
-| --- | --- |
-| Tu equipo del paso 2 | Primera fuente permitida + lote público v1 + historial real |
-| Tú / integración backend | Adaptador del proveedor IA, validación de salida y procedencia |
-| Equipo editorial | Identidad confirmada, revisión de ganchos y pertinencia de propuestas |
-| Integración conjunta | Una demostración de punta a punta, separando observado, calculado e inferido |
-
-La aplicación puede trabajar con datos reales y reglas editoriales sin un LLM. La automatización del descubrimiento y las explicaciones generadas por IA son integraciones adicionales, no opciones que hoy se activen solo con una clave.
+La instancia de Compose está pensada para el equipo/local. Antes de exponerla por Internet hacen falta autenticación, separación de usuarios, HTTPS y gestión de cuotas y retención.

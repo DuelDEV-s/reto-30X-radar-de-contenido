@@ -182,7 +182,7 @@ def test_multiple_networks_partial_success_and_unsupported_profile_paths(monkeyp
     value.profiles.extend([SocialProfile(platform="instagram", url="https://instagram.com/marcaQA"), SocialProfile(platform="linkedin", url="https://linkedin.com/company/marcaQA")])
     data = run_analysis(value, yt_fixture)
     assert data["status"] == "partial"
-    assert [p["status"] for p in data["profiles"]] == ["ready", "requires_configuration", "unsupported"]
+    assert [p["status"] for p in data["profiles"]] == ["ready", "requires_configuration", "requires_configuration"]
     invalid_path = brief("instagram", "https://instagram.com/p/not-a-profile")
     result = run_analysis(invalid_path, lambda request: pytest.fail("Must not request invalid profile paths"))
     assert result["profiles"][0]["status"] == "unsupported"

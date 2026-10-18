@@ -15,7 +15,7 @@ from .batches import save_batch
 from .database import Brand, ProfileAnalysis, TrendBatch, get_session
 from .demo import demo_batch, demo_brief
 from .discovery import discover_creators, geo_targets
-from . import discovery_store
+from . import discovery_store, editorial
 from .query_builder import QueryContext, build_queries
 from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult, TikTokSearchRequest, TrendRunRequest
 from .post_resolver import OEmbedResolver, PostResolver
@@ -557,3 +557,20 @@ def demo(db: DB):
     brand = save_brand(demo_brief(), db)
     batch = save_batch(brand.id, demo_batch(), db)
     return {"brand": brand_output(brand, db), "batch_id": batch["id"]}
+
+
+@app.get("/api/brands/{brand_id}/editorial-sources", tags=["step-3"])
+def editorial_sources(brand_id: str, db: DB):
+    """Saved sources only. Never triggers provider jobs or model calls."""
+    get_brand(brand_id, db)
+    return editorial.sources(db, brand_id)
+
+
+@app.get("/api/brands/{brand_id}/editorial-report", tags=["step-3"])
+def editorial_report(brand_id: str, source: str, db: DB):
+    """Read-only step-3 report across creator discovery and the LinkedIn/YouTube engine."""
+    brand = get_brand(brand_id, db)
+    try:
+        return editorial.report(db, brand, source)
+    except LookupError as error:
+        raise HTTPException(404, str(error))

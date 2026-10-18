@@ -24,8 +24,8 @@ def official_connector_status():
     return [
         {"platform": "youtube", "configured": youtube, "missing": [] if youtube else ["YOUTUBE_API_KEY"], "scope": "Canal público, contadores y hasta 8 videos públicos. La key no habilita por sí sola métricas derivadas.", "analysis_approved": os.getenv("YOUTUBE_ANALYTICS_APPROVED", "false").lower() == "true"},
         {"platform": "instagram", "configured": not missing, "missing": missing, "scope": "Business Discovery: descripción, contadores disponibles y hasta 8 publicaciones públicas de cuentas profesionales."},
-        {"platform": "linkedin", "configured": False, "missing": [], "scope": "Conector no implementado. Se conserva el enlace y el texto aportado."},
-        {"platform": "tiktok", "configured": False, "missing": [], "scope": "Conector no implementado. Se conserva el enlace y el texto aportado."},
+        {"platform": "linkedin", "configured": False, "missing": [], "scope": "Bright Data: páginas públicas de empresa, descripción y seguidores. No perfiles personales. Sin API oficial de respaldo configurada."},
+        {"platform": "tiktok", "configured": False, "missing": [], "scope": "Bright Data: cuentas públicas de marca, biografía, seguidores y total de videos. Sin API oficial de respaldo configurada."},
     ]
 
 
@@ -40,7 +40,7 @@ def connector_status():
             "preferred_provider": "bright_data" if supported else "not_implemented",
             "primary": {"provider": "bright_data", **primary},
             "fallback": {"provider": {"youtube": "youtube_data_api", "instagram": "meta_business_discovery"}.get(fallback["platform"], "not_implemented"), "configured": fallback["configured"], "missing": fallback["missing"]},
-            "scope": ("Bright Data primero; API oficial como respaldo. " if supported else "") + fallback["scope"],
+            "scope": ("Bright Data primero; API oficial como respaldo. " if fallback["platform"] in {"instagram", "youtube"} else "") + fallback["scope"],
         })
     return result
 
@@ -156,6 +156,25 @@ async def inspect_one(profile, client, store=None, budget=None, refresh_bright_d
         return await inspect_official(profile, client)
     base = {"platform": profile.platform, "url": profile.url, "observed_at": datetime.now(timezone.utc), "supplied_description": clean_text(profile.description)}
     try:
+        if profile.platform == "tiktok" and not refresh_bright_data and getattr(store, "session", None) is not None:
+            # Reuse step-2 public profiles without submitting a second paid collection.
+            from . import tiktok_accounts
+            from .database import TikTokAccount
+            canonical = brightdata.canonical_profile(profile.url, "tiktok")
+            username = tiktok_accounts.username_from(canonical)
+            account = store.session.get(TikTokAccount, username)
+            if account and account.fetch_status == "ok" and account.raw and account.is_private is False and tiktok_accounts.aware(account.fetched_at) >= tiktok_accounts.now() - tiktok_accounts.ttl():
+                raw = account.raw
+                cached = {"url": canonical, "is_private": False, "nickname": account.nickname or raw.get("nickname"),
+                          "biography": account.biography or raw.get("biography") or raw.get("signature"),
+                          "followers": account.followers if account.followers is not None else raw.get("followers"),
+                          "videos_count": account.videos_count if account.videos_count is not None else raw.get("videos_count")}
+                value = brightdata.normalize([cached], profile, {"state": "ready", "snapshot_id": None, "created_at": tiktok_accounts.aware(account.fetched_at)})
+                value.observed_at = tiktok_accounts.aware(account.fetched_at)
+                value.collection = None
+                value.message = "Perfil público reutilizado de la caché del paso 2, sin una nueva extracción."
+                value.attempts = [{"provider": "bright_data", "status": "ready", "message": value.message}]
+                return value
         primary = await brightdata.collect(profile, client, store=store, budget=budget, refresh=refresh_bright_data, allow_new_jobs=allow_new_jobs)
         primary.attempts = [{"provider": "bright_data", "status": primary.status, "message": primary.message}]
         return primary
@@ -163,6 +182,8 @@ async def inspect_one(profile, client, store=None, budget=None, refresh_bright_d
         attempt = {"provider": "bright_data", "status": exc.status, "code": exc.code, "message": exc.message}
         collection = getattr(exc, "collection", None)
         if exc.code in {"restricted", "invalid_profile"}:
+            return ProfileResult(**base, provider="bright_data", status=exc.status, message=exc.message, attempts=[attempt], collection=collection)
+        if profile.platform in {"tiktok", "linkedin"}:
             return ProfileResult(**base, provider="bright_data", status=exc.status, message=exc.message, attempts=[attempt], collection=collection)
         fallback = await inspect_official(profile, client)
         fallback.attempts = [attempt, {"provider": fallback.provider, "status": fallback.status, "message": fallback.message}]

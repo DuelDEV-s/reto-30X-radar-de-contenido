@@ -1,8 +1,10 @@
 # 30X · Radar de contenido
 
-Base funcional para el Reto 30X: **Python 3.12 + FastAPI + React/TypeScript + PostgreSQL**. Implementa los pasos 1 y 3 del esquema del equipo y un contrato de ingesta para el paso 2.
+Prototipo del Reto 30X: **Python 3.12 + FastAPI + React/TypeScript + PostgreSQL**. Conecta identidad de marca, los dos motores de descubrimiento del paso 2 y un informe editorial visual del paso 3.
 
 Para conectar fuentes reales y un proveedor IA/JEV, seguir [la guía de integración real](docs/real-setup.md). Distingue la configuración ya disponible del desarrollo que todavía falta.
+
+**Nuevo paso 3:** prioridades por corrida, gráficos de evolución con unidades explícitas, encaje con marca, evidencia con previews bajo demanda, propuestas, brief descargable y enlaces con filtros. Lee datos guardados sin iniciar trabajos de pago. [Flujo y metodología del informe editorial](docs/editorial-radar.md).
 
 **Análisis automático de perfiles disponible:** al crear una marca con redes sociales se consulta Bright Data primero y Meta/YouTube oficiales como respaldo y se genera un JSON con datos, métricas disponibles y una propuesta de identidad. Ver [configuración de Bright Data y respaldos](docs/bright-data.md). Sin credenciales se muestran los requisitos, sin inventar datos. Con observaciones ya guardadas, **Reinterpretar datos guardados** genera una propuesta específica sin nuevas consultas ni créditos de extracción.
 
@@ -47,7 +49,7 @@ La base usa la imagen oficial de PostgreSQL; los Dockerfiles propios están en `
 
 1. Abrir la interfaz y elegir **Explorar demo**. Esto crea una marca y 18 piezas sintéticas, sin acceder a redes.
 2. Abrir un tópico. Revisar evidencia temporal, gancho, afinidad y adaptación sugerida. Las URLs demo están deshabilitadas.
-3. Filtrar por red y por ventana de observación. Exportar el informe JSON si lo necesitan.
+3. Filtrar temas y red. Inspeccionar valores de los gráficos y descargar un brief o el informe JSON desde el panel de método.
 4. Crear una marca propia: nombre, descripción, audiencia, región y tópicos; opcionalmente enlaces y descripciones públicas.
 5. En **Identidad de marca**, editar definición, tópicos y personas; guardar y confirmar.
 6. En **Fuentes e integración**, importar el lote JSON generado por sus compañeros. El radar usa el lote seleccionado; no mezcla fuentes demo con públicas.
@@ -58,13 +60,13 @@ La base usa la imagen oficial de PostgreSQL; los Dockerfiles propios están en `
 | --- | --- | --- |
 | 1 · Identidad | Nombre y perfiles, Bright Data configurable con Meta/YouTube de respaldo, JSON de análisis, síntesis breve, pilares con evidencia, audiencias por validar y revisión humana | `backend/app/profiles.py`: conectores y enriquecimiento; `draft_identity`: base del brief; un LLM sigue pendiente |
 | 2 · Descubrimiento | Contrato v1, validación, procedencia, separación demo/público, idempotencia de lotes. Instagram: creadores por tópico. LinkedIn + YouTube: radar de tendencias con brecha demanda/oferta y propuestas; exporta los videos como lote v1 | Otras fuentes: entregar `BatchCreate` a `POST /api/brands/{id}/trend-batches`. Radar: `backend/app/trends/` y `backend/app/trend_runs.py` |
-| 3 · Priorización | Score explicable, aceleración por vistas/día, coincidencia de tópicos, pieza principal, historial, hipótesis y adaptación | `backend/app/services.py:analyze`: ampliar evidencia o incorporar explicaciones de un modelo |
+| 3 · Informe editorial | Adaptadores para ambos motores y lotes v1, prioridades, series, evidencia y previews, propuestas, brief, filtros en URL y notas de calidad | `backend/app/editorial.py`, `frontend/src/EditorialWorkspace.tsx`; contrato `editorial-v1` |
 
-**Bright Data es el recolector principal de perfiles Instagram/YouTube**, con sus APIs oficiales como respaldo. No hay llamadas a modelos de IA. Los trabajos asíncronos se guardan en PostgreSQL; consultar su estado reutiliza el trabajo y una nueva extracción se solicita explícitamente. El resultado declara qué fuente se consultó, qué datos faltan y qué textos pueden incorporarse a la identidad. Para perfiles, LinkedIn y TikTok aún no tienen conector; LinkedIn sí participa en el descubrimiento de tendencias mediante índices de búsqueda. Las explicaciones del radar del paso 3 siguen siendo plantillas editoriales. El paso 2 continúa encargado del descubrimiento de tendencias. Tener un enlace público no implica permiso de recolección: el proveedor debe comprobar los términos de su fuente.
+**Bright Data recolecta perfiles públicos de marca en Instagram, YouTube y TikTok, y páginas de empresa de LinkedIn.** Meta y YouTube oficiales son respaldos para sus respectivas redes. TikTok puede reutilizar la caché del paso 2. No se admiten perfiles personales de LinkedIn. Los trabajos asíncronos persisten y no se reenvían automáticamente ante un inicio ambiguo. El paso 2 usa modelos según su configuración; el paso 3 presenta sus propuestas guardadas y añade reglas editoriales sin nuevas llamadas a modelos. La fuente y el equipo deben comprobar las condiciones aplicables a la recolección pública.
 
-El prototipo responde: **“¿Qué tópicos de este lote muestran mayor aceleración observable, cuánto coinciden con mi marca y qué experimento editorial puedo hacer?”** No responde con fiabilidad cuáles son los 10 temas que más crecen en toda una plataforma. No estima saturación ni atribuye causalidad a gancho/formato. La confianza describe cantidad de evidencia, no probabilidad estadística.
+El prototipo responde: **“¿Qué temas de esta corrida priorizar, qué señales los respaldan y cómo probarlos con mi audiencia?”** Los estados de tendencia describen la muestra de cada motor; no representan un ranking de toda una plataforma. La confianza no es una probabilidad estadística y las explicaciones no atribuyen causalidad a gancho o formato.
 
-Sin autenticación: entorno de equipo/local, con puertos Docker ligados a loopback. No desplegar públicamente sin aislamiento de usuarios, autenticación, límites de peticiones y endurecimiento. El esquema rechaza campos no definidos, pero el texto libre debe ser revisado por el equipo para excluir datos personales. No se almacenan autores ni comentarios.
+Sin autenticación: entorno de equipo/local, con puertos Docker ligados a loopback. No desplegar públicamente sin aislamiento de usuarios, autenticación y límites de peticiones. El paso 3 no añade contactos ni listas de personas; conserva las referencias públicas y las métricas que los motores del paso 2 ya guardaron. Revisar los textos para excluir datos personales.
 
 ## Desarrollo sin contenedores
 

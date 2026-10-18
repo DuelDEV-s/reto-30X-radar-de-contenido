@@ -14,10 +14,14 @@ from .schemas import ProfileContent, ProfileMetric, ProfileResult
 
 API = "https://api.brightdata.com/datasets/v3"
 TRIGGER_TIMEOUT = httpx.Timeout(25, connect=5)
-DATASET_ENV = {"instagram": "BRIGHT_DATA_INSTAGRAM_DATASET_ID", "youtube": "BRIGHT_DATA_YOUTUBE_DATASET_ID"}
+DATASET_ENV = {"instagram": "BRIGHT_DATA_INSTAGRAM_DATASET_ID", "youtube": "BRIGHT_DATA_YOUTUBE_DATASET_ID",
+               "tiktok": "BRIGHT_DATA_TIKTOK_PROFILES_DATASET_ID", "linkedin": "BRIGHT_DATA_LINKEDIN_COMPANIES_DATASET_ID"}
+DATASET_DEFAULTS = {"tiktok": "gd_l1villgoiiidt09ci", "linkedin": "gd_l1vikfnt1wgvvqz95w"}
 OUTPUT_FIELDS = {
     "instagram": "url|profile_url|account|biography|followers|posts_count|is_private|posts",
     "youtube": "url|name|Description|subscribers|videos_count|views|top_videos",
+    "tiktok": "url|account_id|nickname|biography|signature|followers|videos_count|is_private",
+    "linkedin": "url|name|about|description|slogan|specialties|industries|followers",
 }
 
 
@@ -32,8 +36,10 @@ def config(platform):
     name = DATASET_ENV.get(platform)
     if not name:
         return {"configured": False, "missing": [], "dataset_id": None}
-    missing = [key for key in ("BRIGHT_DATA_API_KEY", name) if not os.getenv(key)]
-    dataset = os.getenv(name, "")
+    dataset = os.getenv(name) or DATASET_DEFAULTS.get(platform, "")
+    missing = [] if os.getenv("BRIGHT_DATA_API_KEY") else ["BRIGHT_DATA_API_KEY"]
+    if not dataset:
+        missing.append(name)
     if dataset and not re.fullmatch(r"gd_[A-Za-z0-9]+", dataset):
         missing.append(name + " (formato gd_…)")
     return {"configured": not missing, "missing": missing, "dataset_id": dataset}
@@ -41,13 +47,23 @@ def config(platform):
 
 def canonical_profile(url, platform):
     parsed = urlsplit(url)
-    hosts = {"instagram": {"www.instagram.com", "instagram.com"}, "youtube": {"www.youtube.com", "youtube.com"}}
+    hosts = {"instagram": {"www.instagram.com", "instagram.com"}, "youtube": {"www.youtube.com", "youtube.com"},
+             "tiktok": {"www.tiktok.com", "tiktok.com"}, "linkedin": {"www.linkedin.com", "linkedin.com"}}
     if parsed.scheme != "https" or parsed.hostname not in hosts.get(platform, set()) or parsed.username or parsed.password or parsed.port not in (443, None):
         raise ProviderError("El enlace no corresponde a un perfil público admitido.", "unsupported", "invalid_profile")
     path = unquote(parsed.path).strip("/")
     if platform == "instagram":
         if not re.fullmatch(r"[A-Za-z0-9_.]{1,30}", path) or path.lower() in {"accounts", "explore", "p", "reel", "reels", "stories", "direct"}:
             raise ProviderError("Usa el enlace de un perfil de Instagram, no una publicación o acceso de login.", "unsupported", "invalid_profile")
+        path = path.lower()
+    elif platform == "tiktok":
+        if not re.fullmatch(r"@[A-Za-z0-9_.]{1,30}", path):
+            raise ProviderError("Usa tiktok.com/@cuenta de la marca, sin enlaces de video ni de login.", "unsupported", "invalid_profile")
+        path = path.lower()
+    elif platform == "linkedin":
+        path = re.sub(r"/about$", "", path)
+        if not re.fullmatch(r"company/[A-Za-z0-9_-]{1,100}", path):
+            raise ProviderError("Para LinkedIn usa una página pública de empresa: linkedin.com/company/nombre. Los perfiles personales no se recolectan.", "unsupported", "invalid_profile")
         path = path.lower()
     else:
         path = re.sub(r"/(about|videos|shorts|featured)$", "", path)
@@ -126,13 +142,29 @@ def public_record(records, profile):
     source = record.get("profile_url") or record.get("url")
     if not isinstance(source, str) or canonical_profile(source, profile.platform) != canonical_profile(profile.url, profile.platform):
         raise ProviderError("El resultado no coincide con el perfil solicitado. Se descartó.", code="profile_mismatch")
-    if profile.platform == "instagram" and record.get("is_private") is not False:
-        raise ProviderError("La respuesta de Instagram no confirma que el perfil sea público. Se descartó.", code="public_unverified")
+    if profile.platform in {"instagram", "tiktok"} and record.get("is_private") is not False:
+        raise ProviderError("La respuesta no confirma que el perfil sea público. Se descartó.", code="public_unverified")
     return record
 
 
 def normalize(records, profile, job):
     record = public_record(records, profile)
+    if profile.platform in {"tiktok", "linkedin"}:
+        tiktok = profile.platform == "tiktok"
+        description = (record.get("biography") or record.get("signature")) if tiktok else (record.get("about") or record.get("description") or record.get("slogan"))
+        if not tiktok:
+            details = [clean_text(record.get(k), 500) for k in ("specialties", "industries") if isinstance(record.get(k), str)]
+            description = "\n".join([clean_text(description), *details]).strip()
+        metrics = ProfileMetric(followers=number(record.get("followers")), posts=number(record.get("videos_count")) if tiktok else None)
+        if not clean_text(description) and all(v is None for v in metrics.model_dump().values()):
+            raise ProviderError("El scraper no devolvió descripción ni contadores reconocibles.", code="unexpected_schema")
+        return ProfileResult(platform=profile.platform, url=profile.url, provider="bright_data", status="ready",
+                             message="Perfil público de la marca obtenido con Bright Data.", observed_at=datetime.now(timezone.utc),
+                             title=clean_text(record.get("nickname") if tiktok else record.get("name"), 300), description=clean_text(description),
+                             metrics=metrics, usable_for_identity=True, supplied_description=clean_text(profile.description),
+                             metrics_notes=["Se conserva información pública de la cuenta de marca. No se recolectan empleados, contactos ni datos personales.",
+                                            "Las vistas acumuladas del perfil no están disponibles; los likes de TikTok no se sustituyen por vistas. No se inicia otro scraper para obtener publicaciones."],
+                             collection=collection_info({**job, "state": "ready"}))
     instagram = profile.platform == "instagram"
     description = record.get("biography") if instagram else record.get("Description", record.get("description"))
     metrics = ProfileMetric(views=None if instagram else number(record.get("views")), followers=number(record.get("followers") if instagram else record.get("subscribers")), posts=number(record.get("posts_count") if instagram else record.get("videos_count")))
@@ -239,6 +271,8 @@ async def collect(profile, client, store=None, budget=None, refresh=False, allow
         if status != "ready":
             raise ProviderError("Bright Data indicó un fallo o un estado no reconocido del trabajo.", code="collection_failed")
         records = await request(client, "GET", f"snapshot/{job['snapshot_id']}", params={"format": "json"})
+        if isinstance(records, dict) and records.get("status") in {"building", "running", "pending"}:
+            return pending_result(profile, job)
         value = normalize(records, profile, job)
         store.save(job, state="ready", result=value.model_dump(mode="json"))
         return value

@@ -16,6 +16,7 @@ import {
   Users,
 } from "lucide-react";
 import { PatternsStep, TrendsStep } from "./TrendsSteps";
+import MediaPreview from "./MediaPreview";
 import { api } from "./types";
 import type {
   Brand,
@@ -106,7 +107,7 @@ type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 /** Búsqueda de creadores por tópico. Instagram parte de Google (SERP); TikTok, de una búsqueda de videos por
  * palabra clave en Bright Data. Desde los candidatos, las etapas son las mismas. */
-export default function DiscoveryPanel({ brand, platform = "instagram" }: { brand: Brand; platform?: DiscoveryPlatform }) {
+export default function DiscoveryPanel({ brand, platform = "instagram", onOpenEditorial }: { brand: Brand; platform?: DiscoveryPlatform; onOpenEditorial: (source: string) => void }) {
   const tiktok = platform === "tiktok";
   const [runs, setRuns] = useState<DiscoveryRunSummary[]>([]);
   const [run, setRun] = useState<DiscoveryRunDetail | null>(null);
@@ -363,6 +364,10 @@ export default function DiscoveryPanel({ brand, platform = "instagram" }: { bran
 
       {run && (
         <>
+          <div className="step-editorial-cta">
+            <div><strong>De la búsqueda al brief editorial</strong><p>Explora prioridades, evolución, previews y propuestas con los resultados guardados.</p></div>
+            <button className="button dark" onClick={() => onOpenEditorial(`creator:${run.id}`)}>Ver informe editorial <ArrowUpRight size={15} /></button>
+          </div>
           <Stepper run={run} step={step} onStep={setStep} />
           <section className="panel pipeline-detail">
             {step === 1 && <QueriesStep run={run} />}
@@ -852,6 +857,7 @@ function PostTable({ items, tiktok = false }: { items: RunPosts["items"]; tiktok
                       </div>
                     )}
                     {p.caption && <p>{p.caption.slice(0, 140)}{p.caption.length > 140 ? "…" : ""}</p>}
+                    <MediaPreview key={p.url} url={p.url} title={p.caption || p.shortcode} compact />
                     {p.transcript && (
                       <details className="post-transcript">
                         <summary>Transcripción ({p.transcript_seconds ?? "—"} s)</summary>

@@ -13,6 +13,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { api } from "./types";
+import MediaPreview from "./MediaPreview";
 import type {
   Brand,
   TrendEngineStatus,
@@ -109,10 +110,12 @@ export default function TrendRadarPanel({
   brand,
   platforms,
   onOpenBatch,
+  onOpenEditorial,
 }: {
   brand: Brand;
   platforms: TrendPlatform[];
   onOpenBatch: (batchId: string) => void;
+  onOpenEditorial: (source: string) => void;
 }) {
   const [engine, setEngine] = useState<TrendEngineStatus | null>(null);
   const [runs, setRuns] = useState<TrendRunSummary[]>([]);
@@ -279,7 +282,13 @@ export default function TrendRadarPanel({
           </div>
         </section>
       ) : run.report ? (
-        <Results run={run} onOpenBatch={onOpenBatch} />
+        <>
+          <div className="step-editorial-cta">
+            <div><strong>Tu informe editorial está listo</strong><p>Reúne tendencias, propuestas y piezas de referencia en el paso 3.</p></div>
+            <button className="button dark" onClick={() => onOpenEditorial(`trend:${run.id}`)}>Ver informe editorial <ArrowRight size={15} /></button>
+          </div>
+          <Results run={run} onOpenBatch={onOpenBatch} />
+        </>
       ) : null}
     </div>
   );
@@ -576,7 +585,7 @@ function OpportunityCard({
           if (!item) return null;
           const youtube = item.platform === "youtube";
           return (
-            <a key={id} href={item.url} target="_blank" rel="noopener noreferrer" className={youtube ? "yt" : "li"}>
+            <div key={id}><a href={item.url} target="_blank" rel="noopener noreferrer" className={youtube ? "yt" : "li"}>
               <span>{youtube ? "YT" : "in"}</span>
               <em>{(item.title || item.excerpt || item.url).replace(/ on LinkedIn:| en LinkedIn:/, ":").slice(0, 90)}</em>
               {youtube && item.metrics && (
@@ -585,7 +594,7 @@ function OpportunityCard({
                 </b>
               )}
               <ArrowUpRight size={11} />
-            </a>
+            </a><MediaPreview key={item.url} url={item.url} title={item.title || item.excerpt || "Publicación"} compact /></div>
           );
         })}
       </div>
