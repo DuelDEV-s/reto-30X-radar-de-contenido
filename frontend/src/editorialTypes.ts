@@ -7,6 +7,13 @@ export type EditorialSource = {
   created_at: string;
   status: string;
   demo: boolean;
+  progress: {
+    stage: string;
+    ready: boolean;
+    label: string;
+    description: string;
+    counts: Record<string, number>;
+  };
 };
 export type Preview = {
   embed_url: string | null;

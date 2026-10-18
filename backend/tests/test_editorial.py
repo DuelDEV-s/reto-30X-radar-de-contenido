@@ -25,6 +25,7 @@ def test_demo_is_frozen_and_never_embeds_or_links_fake_urls(client):
     assert response.status_code == 200
     report = response.json()
     assert report["source"]["demo"] and report["counts"]["posts"] == 18
+    assert sources[0]["progress"]["ready"] and sources[0]["progress"]["counts"] == {"posts": 18}
     assert report["counts"]["topics"] == 6
     assert report["topics"][0]["proposals"][0]["hook"]
     assert all(e["url"] is None and e["preview"]["embed_url"] is None for t in report["topics"] for e in t["evidence"])
@@ -54,9 +55,12 @@ def test_engine_report_preserves_proposals_units_and_frozen_identity_without_sid
     event.listen(engine, "before_cursor_execute", record)
     try:
         response = client.get(f"/api/brands/{bid}/editorial-report", params={"source": source})
+        inventory = client.get(f"/api/brands/{bid}/editorial-sources").json()
     finally:
         event.remove(engine, "before_cursor_execute", record)
     assert response.status_code == 200, response.text
+    saved_source = next(s for s in inventory if s["id"] == source)
+    assert saved_source["progress"]["ready"] and saved_source["progress"]["label"] == "Informe guardado"
     data = response.json()
     assert not data["identity_changed"] and data["identity"]["personas"][0]["role"]
     assert data["topics"][0]["priority"] == 61
@@ -89,6 +93,30 @@ def test_creator_run_can_be_inspected_before_posts_exist(client, platform):
     response = client.get(f"/api/brands/{bid}/editorial-report", params={"source": source})
     assert response.status_code == 200, response.text
     assert response.json()["topics"] == [] and response.json()["warnings"]
+    assert not response.json()["source"]["progress"]["ready"]
+
+
+def test_inventory_distinguishes_search_profiles_and_posts_without_advancing_jobs(client):
+    bid = client.post("/api/demo").json()["brand"]["id"]
+    with session() as db:
+        brand = db.get(Brand, bid)
+        run = DiscoveryRun(brand_id=bid, status="completed", topic="IA", platform="instagram", hl="es", countries=[], max_queries=1,
+                           profiles_only=False, resolve_posts=False, identity=brand.identity, query_count=1, result_count=5,
+                           candidate_count=3, discarded_count=2, unresolved_count=0)
+        db.add(run); db.commit(); source_id = f"creator:{run.id}"
+        def source():
+            return next(s for s in client.get(f"/api/brands/{bid}/editorial-sources").json() if s["id"] == source_id)
+        progress = source()["progress"]
+        assert not progress["ready"] and progress["label"] == "Búsqueda guardada"
+        assert progress["counts"]["candidates"] == 3
+        run.profiles_state = "pending"; db.commit()
+        assert source()["progress"]["label"] == "Perfiles: en proceso"
+        db.refresh(run)
+        assert run.profiles_state == "pending" and run.profiles_snapshot_id is None
+        run.posts_state = "failed"; db.commit()
+        assert source()["progress"]["label"] == "Publicaciones: con error"
+        run.posts_state = "ready"; db.commit()
+        assert source()["progress"]["ready"]
 
 
 @pytest.mark.parametrize("platform", ["instagram", "tiktok"])

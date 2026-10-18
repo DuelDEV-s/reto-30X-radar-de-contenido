@@ -46,7 +46,37 @@ def source_summary(row, kind):
     return {"id": f"{kind}:{row.id}", "kind": kind, "created_at": stamp(row.created_at), "networks": networks,
             "status": row.status if kind != "batch" else "completed",
             "label": (row.topic or "Creadores") if kind == "creator" else "Tendencias y oportunidades" if kind == "trend" else row.data.get("source", "Lote importado"),
-            "demo": kind == "batch" and row.data.get("mode") == "demo"}
+            "demo": kind == "batch" and row.data.get("mode") == "demo", "progress": source_progress(row, kind)}
+
+
+def source_progress(row, kind):
+    """Stored pipeline state, not a live check or a claim that all reviews finished."""
+    if kind == "batch":
+        return {"stage": "imported", "ready": True, "label": "Lote disponible", "counts": {"posts": len(row.data.get("posts", []))},
+                "description": "Observaciones del lote listas para consultar en el informe."}
+    if kind == "trend":
+        if row.report:
+            return {"stage": "report", "ready": True, "label": "Informe guardado",
+                    "counts": {"posts": len(row.report.get("items", [])), "topics": len(row.report.get("topics", []))},
+                    "description": "El motor terminó y guardó temas, evidencia y propuestas."}
+        label = {"failed": "Corrida fallida", "queued": "En cola", "running": "Análisis en curso"}.get(row.status, "Sin informe guardado")
+        return {"stage": row.stage, "ready": False, "label": label,
+                "counts": {}, "description": "Revisa el avance en Descubrimiento. Aquí solo se consulta el estado guardado."}
+    counts = {"candidates": row.candidate_count, "results": row.result_count}
+    if row.posts_state == "ready":
+        return {"stage": "posts", "ready": True, "label": "Publicaciones guardadas", "counts": counts,
+                "description": "El informe muestra las revisiones y líneas base disponibles. Puede haber análisis temático pendiente."}
+    for key, label in (("posts", "Publicaciones"), ("profiles", "Perfiles"), ("search", "Búsqueda")):
+        state = getattr(row, f"{key}_state")
+        if state == "not_started":
+            continue
+        state_label = {"ready": "guardados", "pending": "en proceso", "requesting": "iniciando", "unknown": "sin confirmar", "failed": "con error"}.get(state, state)
+        if key == "search" and state == "ready":
+            state_label = "guardada"
+        return {"stage": key, "ready": False, "label": f"{label}: {state_label}", "counts": counts,
+                "description": "Continúa las etapas pendientes en Descubrimiento para completar el informe."}
+    return {"stage": "search", "ready": False, "label": "Búsqueda fallida" if row.status == "failed" else "Búsqueda guardada", "counts": counts,
+            "description": "Falta completar perfiles, publicaciones y revisión temática en Descubrimiento."}
 
 
 def sources(db, brand_id):

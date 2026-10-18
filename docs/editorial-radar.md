@@ -12,6 +12,8 @@ El radar une los resultados del paso 2 con la identidad utilizada en cada corrid
 
 Fuente, tema, búsqueda, red y marca se conservan en la URL. El enlace funciona contra la misma instancia y base de datos; no publica el informe. Los lotes v1 siguen disponibles en **Ver lotes**.
 
+**Fuentes e integración** reúne las corridas de ambos motores y los lotes de la marca, con filtros de red/origen, estado guardado y acceso al informe. Muestra aparte la configuración de conectores de perfiles (paso 1) y del radar LinkedIn/YouTube (paso 2). La presencia de credenciales no confirma permisos, cuota o acceso en vivo. La importación manual de JSON está en **Importar un lote externo**, como opción avanzada. La pestaña seleccionada también se conserva al recargar.
+
 ## Lecturas sin gasto de proveedores
 
 - `GET /api/brands/{id}/editorial-sources`
