@@ -2,7 +2,11 @@
 
 El paso 1 consulta perfiles **de Instagram y canales de YouTube** mediante Bright Data. Si falta configuración, hay un error, cuota agotada o el trabajo excede su plazo, intenta Meta Business Discovery para Instagram o YouTube Data API para YouTube. Cada resultado registra `provider`, `attempts`, `fallback_used` y el estado de `collection`.
 
-LinkedIn y TikTok conservan su enlace y contexto manual; sus adaptadores todavía no están implementados. Esta integración no sustituye el descubrimiento de tendencias del paso 2 ni añade un LLM.
+El paso 1 también admite cuentas públicas de marca de TikTok (`/@cuenta`) y páginas públicas de empresa de LinkedIn (`/company/nombre`). Los perfiles personales `/in/` se rechazan. No añade un LLM ni reemplaza los motores del paso 2.
+
+TikTok usa `BRIGHT_DATA_TIKTOK_PROFILES_DATASET_ID`, con valor publicado predeterminado `gd_l1villgoiiidt09ci`; es el mismo conector de perfiles del paso 2. LinkedIn usa `BRIGHT_DATA_LINKEDIN_COMPANIES_DATASET_ID`, predeterminado `gd_l1vikfnt1wgvvqz95w`. Ambos usan `BRIGHT_DATA_API_KEY`; no requieren Meta. Confirmar acceso y cuota de esos scrapers en la cuenta. Si existe una ficha pública y vigente de TikTok en la caché del paso 2, se reutiliza sin iniciar otra extracción (salvo **Nueva recolección** explícita).
+
+Contratos publicados de Bright Data: [TikTok Profiles](https://docs.brightdata.com/scrapers/gd_l1villgoiiidt09ci.json) y [LinkedIn Companies](https://docs.brightdata.com/scrapers/gd_l1vikfnt1wgvvqz95w.json). Los conectores están cubiertos con fixtures; eso no confirma el acceso de una cuenta real del proveedor.
 
 ## Configurar en cinco pasos
 
@@ -52,8 +56,10 @@ Se solicitan únicamente estos campos mediante `custom_output_fields`:
 | --- | --- |
 | Instagram Profiles | `url`, `profile_url`, `account`, `biography`, `followers`, `posts_count`, `is_private`, `posts` |
 | YouTube Channel | `url`, `name`, `Description`, `subscribers`, `videos_count`, `views`, `top_videos` |
+| TikTok Profiles | `url`, `account_id`, `nickname`, `biography`, `signature`, `followers`, `videos_count`, `is_private` |
+| LinkedIn Companies | `url`, `name`, `about`, `description`, `slogan`, `specialties`, `industries`, `followers` |
 
-Se valida que la URL de respuesta coincida con la solicitada y, en Instagram, que `is_private` sea expresamente `false`. Una fuente marcada privada o que requiere login se descarta **sin probar otro proveedor para ese contenido**. Una respuesta incompleta o incompatible no se convierte en datos ficticios.
+Se valida que la URL de respuesta coincida con la solicitada y, en Instagram/TikTok, que `is_private` sea expresamente `false`. Una fuente marcada privada o que requiere login se descarta **sin probar otro proveedor para ese contenido**. Una respuesta incompleta o incompatible no se convierte en datos ficticios. LinkedIn conserva descripción, especialidades y seguidores de empresa; no pide empleados, alumni o contactos. TikTok conserva biografía, seguidores y total de videos; sus likes no se interpretan como vistas. Las vistas de perfil ausentes quedan en `null`.
 
 Solo se almacena el resultado normalizado: descripción, contadores agregados disponibles, hasta ocho piezas, referencias públicas y fechas. No se guarda el JSON bruto de Bright Data, autores, comentarios, imágenes, contactos o listas de seguidores. Se omiten correos y teléfonos reconocibles del texto; el equipo debe revisar otros posibles datos personales y trabajar únicamente con cuentas de organización. Las URLs de piezas se reducen a identificadores públicos, quitando parámetros de seguimiento.
 
