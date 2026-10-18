@@ -24,11 +24,12 @@ from typing import Literal, Protocol
 import openai
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .account_review import digest
 from .account_store import now
-from .database import InstagramPost, PostTopicReview
+from .database import InstagramPost, PostTopicReview, TikTokPost
 from .transcription import VIDEO_TYPES
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,10 @@ needs_transcript: true si es un video y el texto recibido no permite saber de qu
 reason: una frase en español con la evidencia que decidió la relevancia."""
 
 
+def instructions(platform: str = "instagram") -> str:
+    return INSTRUCTIONS.replace("Instagram", "TikTok") if platform == "tiktok" else INSTRUCTIONS
+
+
 class PostVerdict(BaseModel):
     relevance: Relevance
     content_kind: ContentKind
@@ -88,7 +93,7 @@ class OpenAIPostReviewer:
     async def review(self, topic: str, brand: dict, post: dict) -> PostVerdict | None:
         response = await self.client.responses.parse(
             model=self.model,
-            instructions=INSTRUCTIONS,
+            instructions=instructions(post.get("red", "instagram")),
             input=json.dumps({"topico": topic, "marca": brand, "post": post}, ensure_ascii=False),
             text_format=PostVerdict,
             reasoning={"effort": self.effort},
@@ -97,24 +102,26 @@ class OpenAIPostReviewer:
         return response.output_parsed
 
 
-def evidence(post: InstagramPost) -> dict:
-    """Lo que ve el LLM del post. La transcripción solo cuenta si salió bien."""
-    return {
+def evidence(post: InstagramPost | TikTokPost) -> dict:
+    """Lo que ve el LLM del post. La transcripción solo cuenta si salió bien. En Instagram no se indica la red,
+    para que los veredictos ya guardados sigan vigentes."""
+    facts = {
         "tipo": post.content_type,
         "caption": (post.caption or "")[:MAX_CAPTION],
         "hashtags": post.hashtags[:20],
         "transcripcion_inicio": post.transcript if post.transcript_status == "ok" else None,
     }
+    return {"red": post.PLATFORM, **facts} if post.PLATFORM != "instagram" else facts
 
 
 def topic_key(topic: str) -> str:
     return digest({"topic": topic.strip().lower(), "prompt_version": PROMPT_VERSION})
 
 
-def reviews_by_shortcode(db: Session, shortcodes: list[str], topic: str) -> dict[str, PostTopicReview]:
+def reviews_by_shortcode(db: Session, shortcodes: list[str], topic: str, platform: str = "instagram") -> dict[str, PostTopicReview]:
     if not shortcodes:
         return {}
-    rows = db.scalars(select(PostTopicReview).where(PostTopicReview.topic_key == topic_key(topic),
+    rows = db.scalars(select(PostTopicReview).where(PostTopicReview.platform == platform, PostTopicReview.topic_key == topic_key(topic),
                                                     PostTopicReview.shortcode.in_(shortcodes))).all()
     return {r.shortcode: r for r in rows}
 
@@ -134,7 +141,8 @@ async def review_posts(db: Session, posts: list[InstagramPost], topic: str, bran
     """Revisa como mucho `limit` posts sin veredicto vigente para `topic`. Devuelve cuántos se revisaron.
 
     Un reel con la transcripción en curso espera a que termine para no pagar dos revisiones seguidas."""
-    existing = reviews_by_shortcode(db, [p.shortcode for p in posts], topic)
+    platform = posts[0].PLATFORM if posts else "instagram"
+    existing = reviews_by_shortcode(db, [p.shortcode for p in posts], topic, platform)
     pending = [p for p in posts if not current(existing.get(p.shortcode), p) and p.transcript_status != "processing"]
     pending = pending[:limit]
     if not pending:
@@ -155,7 +163,7 @@ async def review_posts(db: Session, posts: list[InstagramPost], topic: str, bran
     for post, verdict in zip(pending, verdicts):
         if verdict is None:
             continue
-        row = existing.get(post.shortcode) or PostTopicReview(shortcode=post.shortcode, topic_key=key, topic=topic[:200])
+        row = existing.get(post.shortcode) or PostTopicReview(platform=platform, shortcode=post.shortcode, topic_key=key, topic=topic[:200])
         row.relevance, row.content_kind, row.reason = verdict.relevance, verdict.content_kind, verdict.reason
         row.subtopics = [s.strip()[:80] for s in verdict.subtopics if s.strip()][:3]
         row.used_transcript = post.transcript_status == "ok"
@@ -165,7 +173,12 @@ async def review_posts(db: Session, posts: list[InstagramPost], topic: str, bran
         row.input_digest, row.reviewed_at = digest(evidence(post)), now()
         db.add(row)
         reviewed += 1
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Otra consulta simultánea guardó el mismo veredicto primero; el suyo vale igual.
+        db.rollback()
+        return 0
     return reviewed
 
 

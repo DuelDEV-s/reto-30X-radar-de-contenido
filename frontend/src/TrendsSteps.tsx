@@ -249,6 +249,11 @@ function TrendQuadrant({ topics, selected, onSelect }: { topics: InstagramTrendT
   );
 }
 
+function formatSummary(formats: InstagramTrendTopic["formats"]) {
+  const parts: [number, string][] = [[formats.reel, "reels"], [formats.video ?? 0, "videos"], [formats.carousel, "carruseles"], [formats.image, "imágenes"]];
+  return parts.filter(([n]) => n > 0).map(([n, name]) => `${n} ${name}`).join(", ") || "sin formato identificado";
+}
+
 function TopicDetail({ topic }: { topic: InstagramTrendTopic }) {
   return (
     <section className="trend-detail">
@@ -256,7 +261,7 @@ function TopicDetail({ topic }: { topic: InstagramTrendTopic }) {
       <p className="muted">{topic.description} {stateNotes[topic.state]}</p>
       <p>
         {topic.posts} posts de {topic.creators} creadores · {topic.recent_posts} en los últimos 14 días y {topic.previous_posts} en los 14 anteriores ·
-        {" "}{topic.formats.reel} reels, {topic.formats.carousel} carruseles, {topic.formats.image} imágenes
+        {" "}{formatSummary(topic.formats)}
       </p>
       {topic.production && (
         <p>

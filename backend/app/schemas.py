@@ -244,6 +244,12 @@ class CreatorSearchRequest(StrictModel):
         return values
 
 
+class TikTokSearchRequest(StrictModel):
+    topic: str | None = Field(default=None, min_length=2, max_length=100)
+    max_queries: int = Field(default=5, ge=1, le=10, description="Palabras clave a buscar en TikTok; cada una es una búsqueda en Bright Data.")
+    videos_per_keyword: int | None = Field(default=None, ge=5, le=50, description="Videos por palabra clave. Vacío: TIKTOK_VIDEOS_PER_KEYWORD (20).")
+
+
 class TrendRunRequest(StrictModel):
     platforms: list[Literal["linkedin", "youtube"]] = Field(default_factory=lambda: ["linkedin", "youtube"], min_length=1, max_length=2,
                                                             description="Redes que muestra el informe. YouTube siempre se consulta como sensor de demanda.")

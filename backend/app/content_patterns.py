@@ -160,10 +160,11 @@ def select(posts: list[dict]) -> tuple[list[str], list[str]]:
     return [p["shortcode"] for p in top], [p["shortcode"] for p in control[:control_reels()]]
 
 
-def claim(db: Session, shortcode: str) -> bool:
-    row = db.get(PostContentAnalysis, shortcode)
+def claim(db: Session, post: InstagramPost) -> bool:
+    platform, shortcode = post.PLATFORM, post.shortcode
+    row = db.get(PostContentAnalysis, (platform, shortcode))
     if row is None:
-        db.add(PostContentAnalysis(shortcode=shortcode, status="processing", analyzed_at=now()))
+        db.add(PostContentAnalysis(platform=platform, shortcode=shortcode, status="processing", analyzed_at=now()))
         try:
             db.commit()
             return True
@@ -171,7 +172,7 @@ def claim(db: Session, shortcode: str) -> bool:
             db.rollback()
             return False
     result = db.execute(update(PostContentAnalysis).where(
-        PostContentAnalysis.shortcode == shortcode,
+        PostContentAnalysis.platform == platform, PostContentAnalysis.shortcode == shortcode,
         or_(PostContentAnalysis.status.is_(None),
             (PostContentAnalysis.status == "processing") & (PostContentAnalysis.analyzed_at < now() - STALE_CLAIM)),
     ).values(status="processing", analyzed_at=now()).execution_options(synchronize_session=False))
@@ -215,23 +216,34 @@ async def process(client: httpx.AsyncClient, analyzer: VideoAnalyzer, post: Inst
     return ("ok", features, seconds) if features else ("error", None, None)
 
 
+def analyses(db: Session, platform: str, shortcodes: list[str]) -> dict[str, PostContentAnalysis]:
+    if not shortcodes:
+        return {}
+    rows = db.query(PostContentAnalysis).filter(PostContentAnalysis.platform == platform, PostContentAnalysis.shortcode.in_(shortcodes)).all()
+    return {r.shortcode: r for r in rows}
+
+
 async def analyze_posts(db: Session, posts: list[InstagramPost], analyzer: VideoAnalyzer, client: httpx.AsyncClient, limit: int = BATCH) -> int:
-    done = {r.shortcode: r for r in db.query(PostContentAnalysis).filter(PostContentAnalysis.shortcode.in_([p.shortcode for p in posts])).all()} if posts else {}
+    if not posts:
+        return 0
+    platform = posts[0].PLATFORM
+    done = analyses(db, platform, [p.shortcode for p in posts])
     outdated = [code for code, row in done.items() if row.status == "ok" and not current(row, analyzer.model)]
     if outdated:
         # Otro modelo o un clip más largo que el configurado: se vuelve a analizar.
-        db.execute(update(PostContentAnalysis).where(PostContentAnalysis.shortcode.in_(outdated), PostContentAnalysis.status == "ok")
+        db.execute(update(PostContentAnalysis).where(PostContentAnalysis.platform == platform, PostContentAnalysis.shortcode.in_(outdated),
+                                                     PostContentAnalysis.status == "ok")
                    .values(status=None).execution_options(synchronize_session=False))
         db.commit()
         db.expire_all()
-        done = {r.shortcode: r for r in db.query(PostContentAnalysis).filter(PostContentAnalysis.shortcode.in_(list(done))).all()}
+        done = analyses(db, platform, list(done))
     # Lo que otra consulta tiene reservado se salta: no bloquea la cola.
     pending = [p for p in posts if not (done.get(p.shortcode) and done[p.shortcode].status in FINAL | {"processing"})]
     claimed = []
     for post in pending:
         if len(claimed) == limit:
             break
-        if claim(db, post.shortcode):
+        if claim(db, post):
             claimed.append(post)
     if not claimed:
         return 0
@@ -245,10 +257,10 @@ async def analyze_posts(db: Session, posts: list[InstagramPost], analyzer: Video
         results = await asyncio.gather(*(one(p) for p in claimed))
     except BaseException:
         # Petición cancelada (el cliente cerró la conexión) o error inesperado: se liberan las reservas.
-        release(db, [p.shortcode for p in claimed])
+        release(db, platform, [p.shortcode for p in claimed])
         raise
     for post, (status, features, seconds) in zip(claimed, results):
-        db.execute(update(PostContentAnalysis).where(PostContentAnalysis.shortcode == post.shortcode).values(
+        db.execute(update(PostContentAnalysis).where(PostContentAnalysis.platform == platform, PostContentAnalysis.shortcode == post.shortcode).values(
             status=status, features=features.model_dump() if features else None, seconds=seconds,
             model=analyzer.model if features else None, analyzed_at=now()).execution_options(synchronize_session=False))
     db.commit()
@@ -259,9 +271,10 @@ def current(row: PostContentAnalysis, model: str) -> bool:
     return row.model == model and (row.seconds or 0) <= clip_seconds() + 0.5
 
 
-def release(db: Session, shortcodes: list[str]) -> None:
+def release(db: Session, platform: str, shortcodes: list[str]) -> None:
     db.rollback()
-    db.execute(update(PostContentAnalysis).where(PostContentAnalysis.shortcode.in_(shortcodes), PostContentAnalysis.status == "processing")
+    db.execute(update(PostContentAnalysis).where(PostContentAnalysis.platform == platform, PostContentAnalysis.shortcode.in_(shortcodes),
+                                                 PostContentAnalysis.status == "processing")
                .values(status=None).execution_options(synchronize_session=False))
     db.commit()
 

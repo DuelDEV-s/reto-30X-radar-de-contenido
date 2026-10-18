@@ -3,7 +3,7 @@
 El veredicto (relevancia, tipo de cuenta, si es interna y motivo) se guarda por marca y cuenta, y solo se
 vuelve a pedir si cambia la identidad de la marca o la ficha del perfil.
 
-Solo filtra en la búsqueda por tópico: se incluyen cuentas externas de relevancia alta o media que sean
+Vale igual para cuentas de Instagram y de TikTok (`platform`). Solo filtra en la búsqueda por tópico: se incluyen cuentas externas de relevancia alta o media que sean
 creadores o empresas afines; promociones, gobierno, instituciones, medios y cuentas internas quedan fuera.
 En las cuentas relacionadas el veredicto es informativo.
 """
@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import tiktok_accounts
 from .account_store import accounts_by_username, now
-from .database import AccountReview, Brand, InstagramAccount
+from .database import AccountReview, Brand, InstagramAccount, TikTokAccount
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,15 @@ relevance (qué tanto su contenido se relaciona con lo que hace la marca y con s
 
 reason: una frase en español, concreta, citando la evidencia que decidió el veredicto (incluida la que la hace interna, si aplica)."""
 
+# En TikTok la evidencia trae, en vez de categoría, los videos de la cuenta que aparecieron al buscar el tópico.
+TIKTOK_NOTE = """
+
+La cuenta es de TikTok. recent_captions son descripciones de sus videos que aparecieron al buscar el tópico; videos_count y likes_total ayudan a distinguir a un creador constante de una cuenta con un video viral suelto. Un video viral aislado de una cuenta sin contenido propio sobre el tema no la convierte en creador relevante."""
+
+
+def instructions(platform: str = "instagram") -> str:
+    return INSTRUCTIONS.replace("Instagram", "TikTok") + TIKTOK_NOTE if platform == "tiktok" else INSTRUCTIONS
+
 
 class Verdict(BaseModel):
     relevance: Relevance
@@ -83,10 +93,17 @@ def digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
 
-def brand_context(brand: Brand) -> dict:
-    """Lo que ve el LLM de la marca: nombre y cuentas propias (para reconocer cuentas internas) e identidad."""
-    handles = [p["url"].rstrip("/").rsplit("/", 1)[-1].lower() for p in brand.brief.get("profiles", []) if p.get("platform") == "instagram"]
-    return {"name": brand.brief.get("name"), "instagram_accounts": handles,
+def brand_handles(brand: Brand, platform: str = "instagram") -> list[str]:
+    """Usuarios propios de la marca en la red, según los perfiles de su brief."""
+    urls = [p["url"] for p in brand.brief.get("profiles", []) if p.get("platform") == platform]
+    if platform == "tiktok":
+        return [name for name in map(tiktok_accounts.username_from, urls) if name]
+    return [url.rstrip("/").rsplit("/", 1)[-1].lower() for url in urls]
+
+
+def brand_context(brand: Brand, platform: str = "instagram") -> dict:
+    """Lo que ve el LLM de la marca: nombre y cuentas propias en la red (para reconocer cuentas internas) e identidad."""
+    return {"name": brand.brief.get("name"), f"{platform}_accounts": brand_handles(brand, platform),
             **{k: brand.identity.get(k) for k in ("summary", "audience", "region", "topics", "personas")}}
 
 
@@ -112,7 +129,7 @@ class OpenAIReviewer:
     async def review(self, brand: dict, evidence: dict) -> Verdict | None:
         response = await self.client.responses.parse(
             model=self.model,
-            instructions=INSTRUCTIONS,
+            instructions=instructions(evidence.get("platform", "instagram")),
             input=json.dumps({"marca": brand, "cuenta": evidence}, ensure_ascii=False),
             text_format=Verdict,
             reasoning={"effort": self.effort},
@@ -122,35 +139,44 @@ class OpenAIReviewer:
         return response.output_parsed
 
 
-async def review_accounts(db: Session, brand: Brand, usernames: list[str], reviewer: Reviewer, limit: int | None = None) -> int:
+def evidences(db: Session, accounts: dict, platform: str) -> dict[str, dict]:
+    if platform == "tiktok":
+        return tiktok_accounts.review_evidence(db, accounts)
+    return {name: evidence(account) for name, account in accounts.items()}
+
+
+async def review_accounts(db: Session, brand: Brand, usernames: list[str], reviewer: Reviewer, limit: int | None = None,
+                          platform: str = "instagram") -> int:
     """Revisa las cuentas con ficha cuyo veredicto falte o esté desactualizado. Devuelve cuántas se revisaron.
 
     Con `limit` revisa como mucho esa cantidad por llamada, para que cada consulta responda rápido;
     las siguientes consultas continúan con el resto."""
-    context = brand_context(brand)
+    context = brand_context(brand, platform)
     identity_digest = digest({"brand": context, "prompt_version": PROMPT_VERSION})
-    accounts = accounts_by_username(db, usernames)
-    existing = {r.username: r for r in db.scalars(select(AccountReview).where(AccountReview.brand_id == brand.id, AccountReview.username.in_(usernames))).all()} if usernames else {}
+    model = TikTokAccount if platform == "tiktok" else InstagramAccount
+    accounts = {name: a for name, a in accounts_by_username(db, usernames, model=model).items() if a.raw is not None}
+    found = evidences(db, accounts, platform)
+    existing = reviews_by_username(db, brand.id, usernames, platform)
     pending = []
     for name in dict.fromkeys(usernames):
         account = accounts.get(name)
-        if not account or account.raw is None:
+        if not account:
             continue
-        profile_digest = digest(evidence(account))
+        profile_digest = digest(found[name])
         current = existing.get(name)
         if current and current.identity_digest == identity_digest and current.profile_digest == profile_digest:
             continue
-        pending.append((name, account, profile_digest))
+        pending.append((name, found[name], profile_digest))
     pending = pending[:limit] if limit else pending
     if not pending:
         return 0
     slots = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def one(item):
-        name, account, _ = item
+        name, facts, _ = item
         async with slots:
             try:
-                return await reviewer.review(context, evidence(account))
+                return await reviewer.review(context, facts)
             except (openai.APIError, ValidationError) as error:
                 # Un fallo del proveedor deja la cuenta pendiente de revisión; no rompe la consulta.
                 logger.warning("Revisión LLM falló para @%s: %s", name, type(error).__name__)
@@ -161,7 +187,7 @@ async def review_accounts(db: Session, brand: Brand, usernames: list[str], revie
     for (name, _, profile_digest), verdict in zip(pending, verdicts):
         if verdict is None:
             continue
-        row = existing.get(name) or AccountReview(brand_id=brand.id, username=name)
+        row = existing.get(name) or AccountReview(brand_id=brand.id, platform=platform, username=name)
         row.relevance, row.account_type, row.reason = verdict.relevance, verdict.account_type, verdict.reason
         row.is_internal = verdict.is_internal
         row.model, row.effort = reviewer.model, reviewer.effort
@@ -172,10 +198,11 @@ async def review_accounts(db: Session, brand: Brand, usernames: list[str], revie
     return reviewed
 
 
-def reviews_by_username(db: Session, brand_id: str, usernames: list[str]) -> dict[str, AccountReview]:
+def reviews_by_username(db: Session, brand_id: str, usernames: list[str], platform: str = "instagram") -> dict[str, AccountReview]:
     if not usernames:
         return {}
-    return {r.username: r for r in db.scalars(select(AccountReview).where(AccountReview.brand_id == brand_id, AccountReview.username.in_(usernames))).all()}
+    return {r.username: r for r in db.scalars(select(AccountReview).where(
+        AccountReview.brand_id == brand_id, AccountReview.platform == platform, AccountReview.username.in_(usernames))).all()}
 
 
 def review_dict(review: AccountReview | None, has_profile: bool) -> dict:

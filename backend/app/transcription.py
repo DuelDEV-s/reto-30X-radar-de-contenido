@@ -8,6 +8,10 @@ se comparan sobre el mismo tramo. El video no se guarda; solo el texto.
 Los enlaces del CDN caducan (parámetro `oe`, ~1–2 días después de la recolección): la transcripción corre
 justo después de recoger los posts y un enlace vencido se marca como tal sin descargar nada.
 
+En TikTok el video no se puede descargar sin una sesión (el CDN responde 403), pero TikTok publica sus propios
+subtítulos automáticos (WebVTT, `subtitle_url` en Bright Data): se usan los de los primeros
+TRANSCRIPT_MAX_SECONDS en vez de transcribir, sin costo de OpenAI.
+
 Se procesa por tandas en cada consulta de la vista, como la revisión LLM de cuentas. Cada reel se reserva
 con una transición condicional para que dos consultas simultáneas no lo paguen dos veces.
 """
@@ -38,6 +42,8 @@ STALE_CLAIM = timedelta(minutes=10)
 VIDEO_TYPES = {"reel", "video"}
 # Fallos que no cambian al reintentar; los transitorios (cuota, red) dejan el reel pendiente.
 FINAL = {"ok", "no_speech", "no_audio", "expired", "too_large", "unavailable", "error"}
+SUBTITLES_MODEL = "tiktok_subtitles"
+MAX_SUBTITLE_BYTES = 1_000_000
 
 
 class Transcriber(Protocol):
@@ -74,13 +80,18 @@ def video_url(post: InstagramPost) -> str | None:
     for item in raw.get("post_content") or []:
         if isinstance(item, dict) and item.get("type") == "Video" and str(item.get("url", "")).startswith("https://"):
             return item["url"]
-    return raw.get("video_url") if str(raw.get("video_url", "")).startswith("https://") else None
+    # video_url en Instagram; en TikTok, video_url o cdn_url según la versión del scraper.
+    return next((raw[k] for k in ("video_url", "cdn_url") if str(raw.get(k, "")).startswith("https://")), None)
 
 
 def expires_at(url: str) -> datetime | None:
-    """Vencimiento firmado por el CDN de Instagram: `oe` es un timestamp Unix en hexadecimal."""
+    """Vencimiento firmado por el CDN: en Instagram `oe` es un timestamp Unix en hexadecimal; en TikTok,
+    `x-expires` lo es en decimal."""
+    query = parse_qs(urlsplit(url).query)
     try:
-        return datetime.fromtimestamp(int(parse_qs(urlsplit(url).query)["oe"][0], 16), timezone.utc)
+        if "oe" in query:
+            return datetime.fromtimestamp(int(query["oe"][0], 16), timezone.utc)
+        return datetime.fromtimestamp(int(query["x-expires"][0]), timezone.utc)
     except (KeyError, IndexError, ValueError, OverflowError):
         return None
 
@@ -128,25 +139,71 @@ def extract_audio(video_path: str, audio_path: str, seconds: float) -> float | N
 
 
 def claim(db: Session, post: InstagramPost) -> bool:
-    stale = now() - STALE_CLAIM
-    result = db.execute(update(InstagramPost).where(
-        InstagramPost.shortcode == post.shortcode,
-        or_(InstagramPost.transcript_status.is_(None),
-            (InstagramPost.transcript_status == "processing") & (InstagramPost.transcribed_at < stale)),
+    stale, model = now() - STALE_CLAIM, type(post)
+    result = db.execute(update(model).where(
+        model.shortcode == post.shortcode,
+        or_(model.transcript_status.is_(None),
+            (model.transcript_status == "processing") & (model.transcribed_at < stale)),
     ).values(transcript_status="processing", transcribed_at=now()).execution_options(synchronize_session=False))
     db.commit()
     return result.rowcount == 1
 
 
-def finish(db: Session, shortcode: str, status: str | None, text: str | None, seconds: float | None, model: str | None) -> None:
-    db.execute(update(InstagramPost).where(InstagramPost.shortcode == shortcode).values(
+def finish(db: Session, post: InstagramPost, status: str | None, text: str | None, seconds: float | None, model: str | None) -> None:
+    table = type(post)
+    db.execute(update(table).where(table.shortcode == post.shortcode).values(
         transcript_status=status, transcript=text, transcript_seconds=seconds, transcript_model=model, transcribed_at=now(),
     ).execution_options(synchronize_session=False))
     db.commit()
 
 
+def vtt_seconds(stamp: str) -> float:
+    parts = [float(x) for x in stamp.strip().split()[0].replace(",", ".").split(":")]
+    return sum(value * 60 ** i for i, value in enumerate(reversed(parts)))
+
+
+def parse_vtt(text: str, seconds: float) -> tuple[str, float]:
+    """Texto de los subtítulos que empiezan antes de `seconds`, sin repetir líneas, y hasta dónde llegan."""
+    lines, end, start = [], 0.0, None
+    for block in text.replace("\r\n", "\n").split("\n\n"):
+        rows = [r.strip() for r in block.split("\n") if r.strip()]
+        timing = next((i for i, r in enumerate(rows) if "-->" in r), None)
+        if timing is None:
+            continue
+        begin, finish_at = (vtt_seconds(x) for x in rows[timing].split("-->"))
+        if begin >= seconds:
+            break
+        for row in rows[timing + 1:]:
+            if not lines or lines[-1] != row:
+                lines.append(row)
+        end = min(finish_at, seconds)
+    return " ".join(lines), round(end, 1)
+
+
+async def subtitles(client: httpx.AsyncClient, post) -> tuple[str | None, str | None, float | None]:
+    """(estado, texto, segundos) a partir de los subtítulos automáticos de un video de TikTok."""
+    url = (post.raw or {}).get("subtitle_url")
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return "no_speech", None, None
+    expiry = expires_at(url)
+    if expiry and expiry <= now():
+        return "expired", None, None
+    try:
+        response = await client.get(url, timeout=httpx.Timeout(30, connect=10))
+    except httpx.HTTPError:
+        return None, None, None
+    if response.status_code in (403, 404, 410):
+        return "unavailable", None, None
+    if response.status_code != 200 or len(response.content) > MAX_SUBTITLE_BYTES:
+        return None if response.status_code >= 500 else "error", None, None
+    text, seconds = parse_vtt(response.content.decode("utf-8", "replace"), max_seconds())
+    return ("ok", text, seconds) if text else ("no_speech", None, None)
+
+
 async def process(client: httpx.AsyncClient, transcriber: Transcriber, post: InstagramPost) -> tuple[str | None, str | None, float | None]:
     """(estado, texto, segundos transcritos) de un reel. Estado None: fallo transitorio, se reintenta después."""
+    if post.PLATFORM == "tiktok":
+        return await subtitles(client, post)
     url = video_url(post)
     if url is None:
         return "unavailable", None, None
@@ -202,12 +259,14 @@ async def transcribe_posts(db: Session, posts: list[InstagramPost], transcriber:
     except BaseException:
         # Petición cancelada (el cliente cerró la conexión) o error inesperado: se liberan las reservas.
         db.rollback()
-        db.execute(update(InstagramPost).where(InstagramPost.shortcode.in_([p.shortcode for p in claimed]), InstagramPost.transcript_status == "processing")
+        table = type(claimed[0])
+        db.execute(update(table).where(table.shortcode.in_([p.shortcode for p in claimed]), table.transcript_status == "processing")
                    .values(transcript_status=None).execution_options(synchronize_session=False))
         db.commit()
         raise
     for post, (status, text, seconds) in zip(claimed, results):
-        finish(db, post.shortcode, status, text, seconds, transcriber.model if status == "ok" else None)
+        model = SUBTITLES_MODEL if post.PLATFORM == "tiktok" else transcriber.model
+        finish(db, post, status, text, seconds, model if status == "ok" else None)
     return sum(status is not None for status, _, _ in results)
 
 

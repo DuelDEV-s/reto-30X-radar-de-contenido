@@ -17,15 +17,16 @@ from .demo import demo_batch, demo_brief
 from .discovery import discover_creators, geo_targets
 from . import discovery_store
 from .query_builder import QueryContext, build_queries
-from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult, TrendRunRequest
+from .schemas import BatchCreate, BrandCreate, CreatorSearchRequest, DiscoveryQueryRequest, Identity, Platform, ProfileAnalysisRequest, InterpretationRequest, ProfileResult, TikTokSearchRequest, TrendRunRequest
 from .post_resolver import OEmbedResolver, PostResolver
 from . import related_accounts
 from . import account_review
 from . import transcription
 from . import post_review
-from . import content_patterns, topic_trends
+from . import content_patterns, tiktok_accounts, topic_trends
+from . import tiktok_search as tiktok_search_module
 from .account_store import account_dict
-from .database import DiscoveryRun, InstagramAccount, RelatedAccount, RelatedAccountRun
+from .database import DiscoveryRun, InstagramAccount, RelatedAccount, RelatedAccountRun, TikTokAccount
 from .profile_common import ProviderError
 from .serp import BrightDataSerpClient, SerpClient, SerpError
 from .services import analyze, draft_identity
@@ -317,6 +318,19 @@ def creator_search(brand_id: str, request: CreatorSearchRequest, db: DB, serp: S
     return {"run_id": run.id, "brand_id": brand_id, "identity_status": brand.identity["status"], **result.model_dump(exclude={"outcomes"})}
 
 
+@app.post("/api/brands/{brand_id}/tiktok-search", status_code=202, tags=["step-2-discovery"])
+async def tiktok_search(brand_id: str, request: TikTokSearchRequest, db: DB, client: BRIGHT_DATA):
+    """Busca videos de TikTok por palabras clave de la identidad (Bright Data, discover by keyword) y crea la
+    corrida. La búsqueda es asíncrona: GET /api/discovery-runs/{id} la avanza hasta tener candidatos."""
+    brand = get_brand(brand_id, db)
+    if not os.getenv("BRIGHT_DATA_API_KEY"):
+        raise HTTPException(503, "Bright Data requiere BRIGHT_DATA_API_KEY.")
+    plan = build_queries(QueryContext.from_identity(brand.identity, focus_topic=request.topic, platform="tiktok", max_queries=request.max_queries))
+    run = await discovery_store.start_tiktok_search(db, brand, plan, client, topic=request.topic, max_queries=request.max_queries,
+                                                    per_keyword=request.videos_per_keyword or tiktok_search_module.videos_per_keyword())
+    return discovery_store.detail(db, run)
+
+
 @app.get("/api/brands/{brand_id}/discovery-runs", tags=["step-2-discovery"])
 def discovery_runs(brand_id: str, db: DB):
     """Historial de búsquedas por tópico de la marca, de la más reciente a la más antigua."""
@@ -325,11 +339,14 @@ def discovery_runs(brand_id: str, db: DB):
 
 
 @app.get("/api/discovery-runs/{run_id}", tags=["step-2-discovery"])
-def discovery_run(run_id: str, db: DB):
-    """Detalle de una corrida: identidad usada, queries con sus resultados de Google y candidatos."""
+async def discovery_run(run_id: str, db: DB, client: BRIGHT_DATA):
+    """Detalle de una corrida: identidad usada, queries con sus resultados (Google o videos de TikTok) y candidatos.
+    En TikTok consulta la búsqueda en curso sin iniciar otra."""
     run = db.get(DiscoveryRun, run_id)
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
+    if run.search_state in discovery_store.PROFILES_ACTIVE and not discovery_store.missing_config(run):
+        run = await discovery_store.advance_search(db, run, client)
     return discovery_store.detail(db, run)
 
 
@@ -383,15 +400,35 @@ def instagram_account_avatar(username: str, db: DB):
     return Response(account.avatar, media_type=account.avatar_type or "image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
+@app.get("/api/tiktok-accounts/{username}", tags=["step-2-discovery"])
+def tiktok_account(username: str, db: DB):
+    """Ficha guardada de una cuenta de TikTok (compartida entre marcas y corridas)."""
+    account = db.get(TikTokAccount, username.lower())
+    if not account:
+        raise HTTPException(404, "Cuenta no guardada")
+    return tiktok_accounts.account_dict(account.username, account)
+
+
+@app.get("/api/tiktok-accounts/{username}/avatar", tags=["step-2-discovery"])
+def tiktok_account_avatar(username: str, db: DB):
+    account = db.get(TikTokAccount, username.lower())
+    if not account or not account.avatar:
+        raise HTTPException(404, "Sin foto guardada")
+    return Response(account.avatar, media_type=account.avatar_type or "image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @app.post("/api/discovery-runs/{run_id}/profiles", tags=["step-2-discovery"])
 async def start_run_profiles(run_id: str, db: DB, client: BRIGHT_DATA, reviewer: REVIEWER):
     """Trae la ficha de perfil de los candidatos de la corrida. Solo paga los que no estén guardados y vigentes."""
     run = db.get(DiscoveryRun, run_id)
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
-    if missing := related_accounts.missing_config():
+    if missing := discovery_store.missing_config(run):
         raise HTTPException(503, "Bright Data requiere " + ", ".join(missing) + ".")
-    run = await discovery_store.start_profiles(db, run, client)
+    try:
+        run = await discovery_store.start_profiles(db, run, client)
+    except ProviderError as error:
+        raise HTTPException(409, error.message)
     await review_run(db, run, reviewer)
     return discovery_store.detail(db, run)
 
@@ -399,7 +436,8 @@ async def start_run_profiles(run_id: str, db: DB, client: BRIGHT_DATA, reviewer:
 async def review_run(db, run, reviewer):
     if reviewer and run.profiles_state == "ready":
         # Por tandas: la vista consulta cada pocos segundos y la revisión avanza sin bloquear la respuesta.
-        await account_review.review_accounts(db, db.get(Brand, run.brand_id), discovery_store.candidate_usernames(db, run), reviewer, limit=6)
+        await account_review.review_accounts(db, db.get(Brand, run.brand_id), discovery_store.candidate_usernames(db, run), reviewer, limit=6,
+                                             platform=run.platform)
 
 
 @app.get("/api/discovery-runs/{run_id}/profiles", tags=["step-2-discovery"])
@@ -408,7 +446,7 @@ async def read_run_profiles(run_id: str, db: DB, client: BRIGHT_DATA, reviewer: 
     run = db.get(DiscoveryRun, run_id)
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
-    if run.profiles_state in discovery_store.PROFILES_ACTIVE and not related_accounts.missing_config():
+    if run.profiles_state in discovery_store.PROFILES_ACTIVE and not discovery_store.missing_config(run):
         run = await discovery_store.advance_profiles(db, run, client)
     await review_run(db, run, reviewer)
     return discovery_store.detail(db, run)
@@ -450,6 +488,8 @@ def read_trend_run(run_id: str, db: DB):
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
     return trend_runs.detail(trend_runs.expire_stale(db, run))
+
+
 @app.post("/api/discovery-runs/{run_id}/posts", tags=["step-2-discovery"])
 async def start_run_posts(run_id: str, db: DB, client: BRIGHT_DATA, post_reviewer: POST_REVIEWER, transcriber: TRANSCRIBER, media: MEDIA,
                           analyzer: VIDEO_ANALYZER):
@@ -458,7 +498,7 @@ async def start_run_posts(run_id: str, db: DB, client: BRIGHT_DATA, post_reviewe
     run = db.get(DiscoveryRun, run_id)
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
-    if missing := related_accounts.missing_config():
+    if missing := discovery_store.missing_config(run):
         raise HTTPException(503, "Bright Data requiere " + ", ".join(missing) + ".")
     try:
         run = await discovery_store.start_posts(db, run, client)
@@ -476,7 +516,7 @@ async def read_run_posts(run_id: str, db: DB, client: BRIGHT_DATA, post_reviewer
     run = db.get(DiscoveryRun, run_id)
     if not run:
         raise HTTPException(404, "Corrida no encontrada")
-    if run.posts_state in discovery_store.PROFILES_ACTIVE and not related_accounts.missing_config():
+    if run.posts_state in discovery_store.PROFILES_ACTIVE and not discovery_store.missing_config(run):
         run = await discovery_store.advance_posts(db, run, client)
     await enrich_run_posts(db, run, post_reviewer, transcriber, media, analyzer)
     return discovery_store.posts_detail(db, run)
@@ -490,10 +530,14 @@ def get_run(run_id, db):
 
 
 @app.get("/api/discovery-runs/{run_id}/trends", tags=["step-3"])
-async def run_trends(run_id: str, db: DB, grouper: TOPIC_GROUPER):
+async def run_trends(run_id: str, db: DB, grouper: TOPIC_GROUPER, post_reviewer: POST_REVIEWER):
     """Tópicos de los posts sobre el tópico de la búsqueda: estado (en caliente, emergente, saturado…), tracción,
-    amplitud, momentum y matriz por semana. Unifica los subtemas con el LLM cuando cambian."""
-    return await discovery_store.trends_detail(db, get_run(run_id, db), grouper)
+    amplitud, momentum y matriz por semana. Unifica los subtemas con el LLM cuando cambian. Mientras falten
+    veredictos de relevancia, cada consulta revisa una tanda: la vista avanza aunque no esté en el paso de posts."""
+    run = get_run(run_id, db)
+    if post_reviewer:
+        await discovery_store.review_run_posts(db, run, post_reviewer)
+    return await discovery_store.trends_detail(db, run, grouper)
 
 
 @app.get("/api/discovery-runs/{run_id}/content-patterns", tags=["step-3"])
@@ -501,6 +545,8 @@ async def run_content_patterns(run_id: str, db: DB, media: MEDIA, analyzer: VIDE
     """Rasgos de producción de los primeros 30 s de los reels destacados frente a reels normales de los mismos
     creadores. Cada consulta analiza una tanda pendiente."""
     run = get_run(run_id, db)
+    if run.platform == "tiktok":
+        raise HTTPException(409, "Los patrones de producción no están disponibles para TikTok: su CDN no permite descargar los videos.")
     if analyzer:
         await discovery_store.analyze_run_content(db, run, analyzer, media)
     return discovery_store.patterns_detail(db, run)

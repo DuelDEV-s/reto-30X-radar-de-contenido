@@ -2,8 +2,8 @@
 
 Un post es relevante cuando rinde por encima de lo que ese creador consigue normalmente, no cuando tiene
 muchos likes en absoluto: así una cuenta de 5 mil seguidores y una de 2 millones se comparan en la misma
-escala. Bright Data no entrega vistas (ni en posts ni en reels), así que todo se mide con likes y
-comentarios. Pasos para cada post:
+escala. En Instagram, Bright Data no entrega vistas (ni en posts ni en reels), así que todo se mide con likes
+y comentarios. En TikTok sí hay vistas reales, y además compartidos. Pasos para cada post:
 
 1. Madurez: un post acumula interacciones en sus primeras horas o días y luego se estanca. Se aproxima
    con una curva de saturación f(edad) = 1 − e^(−edad/τ), con τ distinto para video y estático, y el
@@ -13,9 +13,10 @@ comentarios. Pasos para cada post:
 2. Línea base del creador: mediana de los valores proyectados de sus otros posts maduros del mismo
    formato (video o estático), sin contar el propio post. Si no hay MIN_BASELINE posts de ese formato,
    se usan todos sus posts y la confianza baja.
-3. Señales: likes (la mejor aproximación al alcance que tenemos) y comentarios (resonancia), por
-   separado. Cada una da un múltiplo frente a su línea base y el rendimiento es su media geométrica
-   ponderada: un pico de comentarios inducido ("comenta X y te lo envío") pesa, pero no domina.
+3. Señales: en Instagram, likes (la mejor aproximación al alcance que tenemos) y comentarios
+   (resonancia); en TikTok, vistas (alcance), likes, compartidos y comentarios. Cada una da un múltiplo
+   frente a su línea base y el rendimiento es su media geométrica ponderada: un pico de comentarios
+   inducido ("comenta X y te lo envío") pesa, pero no domina.
 4. Rareza: z robusto en escala logarítmica (mediana y MAD) para distinguir un ×2 de un creador muy
    constante de un ×2 de un creador que siempre oscila.
 
@@ -35,6 +36,10 @@ TAU_HOURS = {"video": 48.0, "static": 18.0}
 MIN_AGE_HOURS = 12.0
 MIN_BASELINE = 4
 WEIGHTS = {"likes": 0.7, "comments": 0.3}
+# TikTok: las vistas miden el alcance directamente; compartir es la señal de resonancia más fuerte.
+PLATFORM_WEIGHTS = {"instagram": WEIGHTS, "tiktok": {"views": 0.5, "likes": 0.25, "shares": 0.15, "comments": 0.1}}
+# Señal que decide si hay evidencia suficiente para confiar en el puntaje.
+PRIMARY = {"instagram": "likes", "tiktok": "views"}
 # MAD mínimo (en log natural) para que un creador muy constante no convierta cualquier diferencia en rareza.
 MIN_MAD = 0.15
 # Pseudo-cuenta que suaviza el múltiplo: con una base de 0–2 likes, 2 likes no son "el triple de lo normal".
@@ -58,6 +63,9 @@ class PostSample:
     likes: int | None
     comments: int | None
     followers: int | None
+    views: int | None = None
+    shares: int | None = None
+    platform: str = "instagram"
 
 
 def format_group(content_type: str | None) -> str:
@@ -74,8 +82,8 @@ def maturity(hours: float, fmt: str) -> float:
 
 
 def signals(post: PostSample) -> dict[str, int]:
-    """Valores observados disponibles. Likes ocultos (None) dejan solo la señal de comentarios."""
-    return {name: value for name, value in (("likes", post.likes), ("comments", post.comments)) if value is not None}
+    """Valores observados disponibles de las señales de su red. Likes ocultos (None) dejan fuera esa señal."""
+    return {name: getattr(post, name) for name in PLATFORM_WEIGHTS[post.platform] if getattr(post, name) is not None}
 
 
 def projected(post: PostSample) -> dict[str, float]:
@@ -111,6 +119,7 @@ def score_post(post: PostSample, peers: list[PostSample]) -> dict:
     same = [p for p in mature if p.format == post.format]
     pool, scope = (same, "formato") if len(same) >= MIN_BASELINE else (mature, "todos")
     values = projected(post)
+    weights = PLATFORM_WEIGHTS[post.platform]
     breakdown, log_sum, z_sum, weight_sum = {}, 0.0, 0.0, 0.0
     for name, value in values.items():
         history = [v for v in (projected(p).get(name) for p in pool) if v is not None]
@@ -121,16 +130,17 @@ def score_post(post: PostSample, peers: list[PostSample]) -> dict:
         z = robust_z(value, history)
         breakdown[name] = {"observed": signals(post)[name], "projected": round(value), "baseline": round(base),
                            "ratio": round(ratio, 2), "z": round(z, 2), "baseline_posts": len(history)}
-        log_sum += WEIGHTS[name] * math.log(ratio)
-        z_sum += WEIGHTS[name] * z
-        weight_sum += WEIGHTS[name]
+        log_sum += weights[name] * math.log(ratio)
+        z_sum += weights[name] * z
+        weight_sum += weights[name]
     performance = math.exp(log_sum / weight_sum) if weight_sum else None
     z = z_sum / weight_sum if weight_sum else None
     provisional = hours < MIN_AGE_HOURS
     smallest = min((b["baseline_posts"] for b in breakdown.values()), default=0)
-    # Sin likes, o con una base de likes por debajo de la pseudo-cuenta (audiencia que casi no interactúa),
-    # hay poca evidencia. Los comentarios suelen ser pocos y no cuentan para esto.
-    weak = "likes" not in breakdown or breakdown["likes"]["baseline"] < SMOOTHING
+    # Sin la señal principal (likes en Instagram, vistas en TikTok), o con su base por debajo de la pseudo-cuenta
+    # (audiencia que casi no interactúa), hay poca evidencia. Los comentarios suelen ser pocos y no cuentan para esto.
+    primary = PRIMARY[post.platform]
+    weak = primary not in breakdown or breakdown[primary]["baseline"] < SMOOTHING
     if provisional or scope == "todos" or weak:
         confidence = "baja"
     elif smallest < MIN_BASELINE * 2 or len(breakdown) < len(values):
@@ -168,8 +178,10 @@ def creator_baseline(posts: list[PostSample], window_days: int) -> dict:
         "mature_posts": len(mature),
         "posts_per_week": round(len(posts) / window_days * 7, 1),
         "formats": {fmt: sum(p.format == fmt for p in posts) for fmt in ("video", "static")},
+        "median_views": med("views"),
         "median_likes": med("likes"),
         "median_comments": med("comments"),
+        "median_shares": med("shares"),
         "median_engagement_rate": round(median(rates), 4) if rates else None,
         "followers": followers,
     }
@@ -201,9 +213,9 @@ def analyze(posts: list[PostSample], window_days: int) -> tuple[dict[str, dict],
     return scores, baselines
 
 
-def method() -> dict:
+def method(platform: str = "instagram") -> dict:
     """Parámetros del cálculo, para mostrarlos junto al resultado."""
-    return {"tau_hours": TAU_HOURS, "min_age_hours": MIN_AGE_HOURS, "min_baseline_posts": MIN_BASELINE, "weights": WEIGHTS,
+    return {"tau_hours": TAU_HOURS, "min_age_hours": MIN_AGE_HOURS, "min_baseline_posts": MIN_BASELINE, "weights": PLATFORM_WEIGHTS[platform],
             "smoothing": SMOOTHING, "labels": {name: {"min_performance": p, "min_z": z} for name, p, z in LABELS},
             "low_performance": LOW_PERFORMANCE, "comment_bait": {"ratio": COMMENT_BAIT_RATIO, "min_comments": COMMENT_BAIT_MIN},
             "min_velocity_hours": MIN_VELOCITY_HOURS}
